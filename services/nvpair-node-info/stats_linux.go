@@ -28,19 +28,17 @@ import (
 //     two ticks (it reports cumulative jiffies, so a single read is
 //     meaningless — we need a delta).
 //   - memory-used  : /proc/meminfo, MemTotal - MemAvailable.
-//   - GPU          : `nvidia-smi --query-gpu=uuid,utilization.gpu,memory.used`,
-//     joined back to the static GPUInfo records by UUID (the statsKey that
-//     gpu_linux.go stamps on each adapter). On unified-memory architectures
-//     (UMA, e.g. Grace-Blackwell / DGX Spark) nvidia-smi returns [N/A] for
-//     memory.used; buildResponse maps the independently sampled system-memory
-//     usage onto those statically identified adapters.
+//   - GPU          : private NVIDIA and AMD adapters, joined back to static
+//     GPUInfo records by their opaque stats keys. NVIDIA UMA rows use the
+//     independently sampled system-memory usage; AMD APUs such as Strix Halo
+//     use the GTT pool reported by amd-smi.
 //
 // Like the Windows collector we keep one background goroutine ticking once a
 // second and publish the combined statsSnapshot via an atomic pointer swap;
-// HTTP handlers read it lock-free. If nvidia-smi is missing (no NVIDIA driver,
-// or an AMD/Intel-only host) GPU stats are simply absent while CPU and memory
-// keep working. If /proc reads fail the corresponding field drops out via the
-// snapshot's zero value and the downstream omitempty tags.
+// HTTP handlers read it lock-free. If either vendor tool is missing, the other
+// adapter continues while CPU and memory keep working. If /proc reads fail the
+// corresponding field drops out via the snapshot's zero value and the
+// downstream omitempty tags.
 const statsTickInterval = time.Second
 
 const (
@@ -71,9 +69,9 @@ type statsCollector struct {
 	// goroutine reads or writes it, so no synchronization is needed.
 	prevCPU cpuTimes
 
-	// nvidiaUnavailable latches on the first nvidia-smi failure so we don't
-	// re-spawn (and re-warn about) a missing binary every tick.
-	nvidiaUnavailable atomic.Bool
+	// gpuCollectors owns independent NVIDIA and AMD adapters. Each can latch a
+	// missing or broken tool without suppressing the other adapter.
+	gpuCollectors *linuxGPUCollectors
 
 	stop     chan struct{}
 	done     chan struct{}
@@ -87,8 +85,9 @@ type statsCollector struct {
 // three-second timeout. Never returns nil.
 func startStatsCollector() *statsCollector {
 	c := &statsCollector{
-		stop: make(chan struct{}),
-		done: make(chan struct{}),
+		stop:          make(chan struct{}),
+		done:          make(chan struct{}),
+		gpuCollectors: defaultLinuxGPUCollectors(),
 	}
 	c.latest.Store(initialMemorySnapshot(readMemoryUsed))
 	// Prime the CPU baseline so the first tick produces a real delta rather
@@ -150,23 +149,15 @@ func (c *statsCollector) decodeSnapshot() *statsSnapshot {
 	return snap
 }
 
-// decodeGPU queries nvidia-smi and folds the per-GPU results into out, keyed
-// by UUID. On the first failure it latches nvidiaUnavailable so subsequent
-// ticks short-circuit silently. Unified-memory usage remains available through
-// the independent /proc/meminfo sample assembled by buildResponse.
+// decodeGPU queries each Linux vendor adapter and folds keyed results into out.
+// A failed adapter does not affect the other adapter's sample. NVIDIA UMA usage
+// remains available through the independent /proc/meminfo sample assembled by
+// buildResponse.
 func (c *statsCollector) decodeGPU(out map[string]gpuStat) bool {
-	if c.nvidiaUnavailable.Load() {
+	if c.gpuCollectors == nil {
 		return false
 	}
-	csv, err := nvidiaSmiCSV("uuid,utilization.gpu,memory.used")
-	if err != nil {
-		if c.nvidiaUnavailable.CompareAndSwap(false, true) {
-			slog.Warn("nvidia-smi unavailable; GPU utilization / dedicated VRAM-used will not be reported",
-				"err", err)
-		}
-		return false
-	}
-	parsed, utilizationSamples := parseNvidiaDynamic(csv)
+	parsed, utilizationSamples := c.gpuCollectors.sample()
 	for k, v := range parsed {
 		out[k] = v
 	}

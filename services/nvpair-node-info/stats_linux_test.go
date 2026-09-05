@@ -6,7 +6,10 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -359,4 +362,196 @@ func TestIsNvidiaSmiNA(t *testing.T) {
 			t.Fatalf("isNvidiaSmiNA(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
+}
+
+func TestParseAmdStaticAndMemory(t *testing.T) {
+	gpus := parseAmdStatic(`{
+  "gpu_data": [
+    {
+      "gpu": 0,
+      "asic": {"market_name": "AMD Radeon AI PRO R9700"},
+      "vram": {"type": "GDDR6", "size": {"value": 32704, "unit": "MB"}}
+    },
+    {
+      "gpu": 1,
+      "asic": {"market_name": "AMD Radeon 8060S Graphics"},
+      "vram": {"type": "LPDDR5X", "size": {"value": 512, "unit": "MB"}}
+    },
+    {
+      "gpu": 2,
+      "asic": "N/A",
+      "vram": {"size": "N/A"}
+    }
+  ]
+}`)
+
+	applyAmdMemoryInventory(gpus, parseAmdMemory(`{
+  "gpu_data": [
+    {
+      "gpu": 0,
+      "mem_usage": {
+        "total_vram": {"value": 32704, "unit": "MB"},
+        "total_gtt": {"value": 0, "unit": "MB"}
+      }
+    },
+    {
+      "gpu": 1,
+      "mem_usage": {
+        "total_vram": {"value": 512, "unit": "MB"},
+        "total_gtt": {"value": 98304, "unit": "MB"}
+      }
+    }
+  ]
+}`))
+
+	want := []GPUInfo{
+		{Name: "AMD Radeon AI PRO R9700", VramBytes: 32704 * 1024 * 1024, statsKey: "amd:0"},
+		{Name: "AMD Radeon 8060S Graphics", VramBytes: 98304 * 1024 * 1024, statsKey: "amd:1", usesGTTMemory: true},
+	}
+	if !reflect.DeepEqual(gpus, want) {
+		t.Fatalf("AMD inventory = %+v, want %+v", gpus, want)
+	}
+}
+
+func TestParseAmdDynamic(t *testing.T) {
+	stats, samples := parseAmdDynamic(`{
+  "gpu_data": [
+    {
+      "gpu": 0,
+      "usage": {"gfx_activity": {"value": 47, "unit": "%"}},
+      "mem_usage": {
+        "total_vram": {"value": 32704, "unit": "MB"},
+        "used_vram": {"value": 4096, "unit": "MB"},
+        "total_gtt": {"value": 0, "unit": "MB"},
+        "used_gtt": {"value": 0, "unit": "MB"}
+      }
+    },
+    {
+      "gpu": 1,
+      "usage": {"gfx_activity": {"value": 0, "unit": "%"}},
+      "mem_usage": {
+        "total_vram": {"value": 512, "unit": "MB"},
+        "used_vram": {"value": 128, "unit": "MB"},
+        "total_gtt": {"value": 98304, "unit": "MB"},
+        "used_gtt": {"value": 40960, "unit": "MB"}
+      }
+    },
+    {
+      "gpu": 2,
+      "usage": "N/A",
+      "mem_usage": "N/A"
+    }
+  ]
+}`, map[string]bool{"amd:1": true})
+
+	want := map[string]gpuStat{
+		"amd:0": {UtilizationPct: 47, VRAMUsed: 4096 * 1024 * 1024},
+		"amd:1": {UtilizationPct: 0, VRAMUsed: 40960 * 1024 * 1024},
+		"amd:2": {},
+	}
+	if !reflect.DeepEqual(stats, want) {
+		t.Fatalf("AMD dynamic stats = %+v, want %+v", stats, want)
+	}
+	if samples != 2 {
+		t.Fatalf("AMD utilization samples = %d, want 2", samples)
+	}
+}
+
+func TestLinuxGPUCollectorsMergeVendors(t *testing.T) {
+	runner := linuxGPUFixtureRunner(map[string]linuxGPUFixture{
+		linuxGPUCommandKey("nvidia-smi", "--query-gpu=uuid,name,memory.total", "--format=csv,noheader,nounits"): {
+			output: "GPU-nvidia, NVIDIA GeForce RTX 4090, 24564\n",
+		},
+		linuxGPUCommandKey("nvidia-smi", "--query-gpu=uuid,utilization.gpu,memory.used", "--format=csv,noheader,nounits"): {
+			output: "GPU-nvidia, 31, 2048\n",
+		},
+		linuxGPUCommandKey("amd-smi", "static", "--asic", "--vram", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"asic":{"market_name":"AMD Radeon AI PRO R9700"},"vram":{"type":"GDDR6","size":{"value":32704,"unit":"MB"}}}]}`,
+		},
+		linuxGPUCommandKey("amd-smi", "metric", "--mem-usage", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"mem_usage":{"total_vram":{"value":32704,"unit":"MB"},"used_vram":{"value":1024,"unit":"MB"},"total_gtt":{"value":0,"unit":"MB"},"used_gtt":{"value":0,"unit":"MB"}}}]}`,
+		},
+		linuxGPUCommandKey("amd-smi", "metric", "--usage", "--mem-usage", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"usage":{"gfx_activity":{"value":59,"unit":"%"}},"mem_usage":{"total_vram":{"value":32704,"unit":"MB"},"used_vram":{"value":1024,"unit":"MB"},"total_gtt":{"value":0,"unit":"MB"},"used_gtt":{"value":0,"unit":"MB"}}}]}`,
+		},
+	})
+	collectors := newLinuxGPUCollectors(runner, func() uint64 { return 0 }, func() []GPUInfo {
+		return []GPUInfo{{Name: "fallback should not be used"}}
+	})
+
+	wantInventory := []GPUInfo{
+		{Name: "NVIDIA GeForce RTX 4090", VramBytes: 24564 * 1024 * 1024, statsKey: "GPU-nvidia"},
+		{Name: "AMD Radeon AI PRO R9700", VramBytes: 32704 * 1024 * 1024, statsKey: "amd:0"},
+	}
+	if got := collectors.inventory(); !reflect.DeepEqual(got, wantInventory) {
+		t.Fatalf("merged inventory = %+v, want %+v", got, wantInventory)
+	}
+
+	stats, samples := collectors.sample()
+	wantStats := map[string]gpuStat{
+		"GPU-nvidia": {UtilizationPct: 31, VRAMUsed: 2048 * 1024 * 1024},
+		"amd:0":      {UtilizationPct: 59, VRAMUsed: 1024 * 1024 * 1024},
+	}
+	if !reflect.DeepEqual(stats, wantStats) {
+		t.Fatalf("merged dynamic stats = %+v, want %+v", stats, wantStats)
+	}
+	if samples != 2 {
+		t.Fatalf("merged utilization samples = %d, want 2", samples)
+	}
+}
+
+func TestLinuxGPUCollectorsKeepWorkingWhenVendorToolFails(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		brokenVendor string
+		wantKey      string
+	}{
+		{name: "missing nvidia-smi leaves AMD usable", brokenVendor: "nvidia-smi", wantKey: "amd:0"},
+		{name: "broken amd-smi leaves NVIDIA usable", brokenVendor: "amd-smi", wantKey: "GPU-nvidia"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			runner := linuxGPUFixtureRunner(map[string]linuxGPUFixture{
+				linuxGPUCommandKey("nvidia-smi", "--query-gpu=uuid,utilization.gpu,memory.used", "--format=csv,noheader,nounits"): {
+					output: "GPU-nvidia, 31, 2048\n",
+				},
+				linuxGPUCommandKey("amd-smi", "metric", "--usage", "--mem-usage", "--json"): {
+					output: `{"gpu_data":[{"gpu":0,"usage":{"gfx_activity":{"value":59,"unit":"%"}},"mem_usage":{"total_vram":{"value":32704,"unit":"MB"},"used_vram":{"value":1024,"unit":"MB"},"total_gtt":{"value":0,"unit":"MB"},"used_gtt":{"value":0,"unit":"MB"}}}]}`,
+				},
+			})
+			broken := errors.New("tool unavailable")
+			collectors := newLinuxGPUCollectors(func(ctx context.Context, name string, args ...string) (string, error) {
+				if name == c.brokenVendor {
+					return "", broken
+				}
+				return runner(ctx, name, args...)
+			}, func() uint64 { return 0 }, func() []GPUInfo { return nil })
+
+			stats, samples := collectors.sample()
+			if _, ok := stats[c.wantKey]; !ok {
+				t.Fatalf("working vendor stat %q missing from %+v", c.wantKey, stats)
+			}
+			if samples != 1 {
+				t.Fatalf("utilization samples = %d, want 1", samples)
+			}
+		})
+	}
+}
+
+type linuxGPUFixture struct {
+	output string
+	err    error
+}
+
+func linuxGPUFixtureRunner(fixtures map[string]linuxGPUFixture) linuxGPUCommandRunner {
+	return func(_ context.Context, name string, args ...string) (string, error) {
+		fixture, ok := fixtures[linuxGPUCommandKey(name, args...)]
+		if !ok {
+			return "", errors.New("unexpected GPU command")
+		}
+		return fixture.output, fixture.err
+	}
+}
+
+func linuxGPUCommandKey(name string, args ...string) string {
+	return name + " " + strings.Join(args, " ")
 }
