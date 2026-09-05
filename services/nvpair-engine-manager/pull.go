@@ -66,7 +66,11 @@ func (e *Executor) PullModelStream(ctx context.Context, engine, model string, pa
 		return nil, fmt.Errorf("engine %q has no action %q", engine, pullModelAction)
 	}
 	if len(params) == 0 || string(params) == "null" {
-		params, _ = json.Marshal(map[string]string{"name": model, "model": model})
+		if engine == "lemonade" {
+			params, _ = json.Marshal(map[string]any{"model_name": model, "stream": true, "subscribe": false})
+		} else {
+			params, _ = json.Marshal(map[string]string{"name": model, "model": model})
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, e.actionTimeout)

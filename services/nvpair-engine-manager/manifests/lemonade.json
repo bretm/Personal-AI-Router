@@ -1,0 +1,49 @@
+{
+  "engine": "lemonade",
+  "display_name": "Lemonade",
+  "manifest_version": 1,
+  "runtime": {
+    "args": ["--host", "{host}", "--port", "{port}"],
+    "bind": "127.0.0.1",
+    "port": 13305,
+    "ready": { "http": "http://127.0.0.1:{port}/v1/health", "status": 200, "timeout_s": 30 },
+    "stop": { "signal": "term", "grace_s": 5 },
+    "health": { "http": "http://127.0.0.1:{port}/v1/health", "status": 200, "interval_s": 10 }
+  },
+  "platforms": {
+    "windows/amd64": { "runtime": { "bin": "lemond" } },
+    "windows/arm64": { "runtime": { "bin": "lemond" } },
+    "darwin/amd64": { "runtime": { "bin": "lemond" } },
+    "darwin/arm64": { "runtime": { "bin": "lemond" } },
+    "linux/amd64": { "runtime": { "bin": "lemond" } },
+    "linux/arm64": { "runtime": { "bin": "lemond" } }
+  },
+  "actions": {
+    "list_models": {
+      "description": "List locally available Lemonade models.",
+      "http": { "method": "GET", "path": "/v1/models" },
+      "result": { "array": "data", "field": "id" }
+    },
+    "loaded_models": {
+      "description": "List Lemonade models currently loaded in memory.",
+      "http": { "method": "GET", "path": "/v1/health" },
+      "result": { "array": "all_models_loaded", "field": "model_name" }
+    },
+    "pull_model": {
+      "description": "Download a Lemonade model by name.",
+      "http": { "method": "POST", "path": "/v1/pull" }
+    },
+    "load_model": {
+      "description": "Load a Lemonade model into memory.",
+      "http": { "method": "POST", "path": "/v1/load" }
+    },
+    "unload_model": {
+      "description": "Unload a Lemonade model from memory.",
+      "http": { "method": "POST", "path": "/v1/unload" }
+    },
+    "delete_model": {
+      "description": "Delete a Lemonade model.",
+      "http": { "method": "POST", "path": "/v1/delete" }
+    }
+  }
+}

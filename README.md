@@ -239,6 +239,8 @@ Each entry assumes the ones before it.
 8. **[Developer guide](docs/developing.mdx)** — read this before contributing:
    where the code lives, how a change travels through the layers, and the
    conventions the project enforces.
+9. **[Lemonade engine integration](docs/lemonade-engine.mdx)** — contributor
+   implementation plan for adding Lemonade; not behavior available in a release.
 
 Component references, for when you already know what you are looking for:
 

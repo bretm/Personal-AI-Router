@@ -43,5 +43,20 @@ export const EngineCapabilities: Record<EngineType, EngineCaps> = {
         // server. Deleting therefore interrupts inference and needs a warning.
         restartsOnModelDelete: true,
         engineHub: { label: 'LM Studio', url: 'https://lmstudio.ai/models' }
+    },
+    lemonade: {
+        hasExpiry: false,
+        hasEject: true,
+        // Lemonade is externally installed in the first PAIR integration.
+        hasInstall: [],
+        hasEnginePort: true,
+        hasInstallPath: false,
+        hasProxyWebUI: false,
+        hasPreferredNode: false,
+        hasCrashAlert: false,
+        hasModelSearchOnlyWhenRunning: true,
+        modelOpsWhenStopped: false,
+        hasDeleteModel: true,
+        engineHub: { label: 'Lemonade', url: 'https://github.com/lemonade-sdk/lemonade' }
     }
 }

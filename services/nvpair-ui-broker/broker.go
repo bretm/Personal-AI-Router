@@ -153,6 +153,7 @@ type Broker struct {
 	nodeInfoPath      string
 	proxyPath         string
 	lmstudioProxyPath string
+	lemonadeProxyPath string
 	workloadMgrPath   string
 	errorsPath        string
 	engineMgrPath     string
@@ -213,6 +214,7 @@ type Broker struct {
 	nodeInfo      *nodeInfoProcess
 	proxy         *proxyProcess
 	lmstudioProxy *proxyProcess
+	lemonadeProxy *proxyProcess
 	workloadMgr   *workloadManagerProcess
 	errorsProc    *errorsProcess
 	engineMgr     *rpcWorker
@@ -228,6 +230,7 @@ type Broker struct {
 	nodeInfoSup      *supervisor
 	proxySup         *supervisor
 	lmstudioProxySup *supervisor
+	lemonadeProxySup *supervisor
 	workloadMgrSup   *supervisor
 	errorsSup        *supervisor
 	engineMgrSup     *supervisor
@@ -244,14 +247,15 @@ type Broker struct {
 	subMu      sync.Mutex
 	subscribed bool
 
-	// proxyMu guards proxySubscribed and lmstudioProxySubscribed. The
-	// proxy:<event> / lmstudio-proxy:<event> streams are opt-in like
+	// proxyMu guards the per-proxy event subscriptions. The
+	// proxy:<event> / lmstudio-proxy:<event> / lemonade-proxy:<event> streams are opt-in like
 	// discovery's: the forward*Notification hooks (on each proxy's reader
 	// goroutine) read the flags while the *:subscribe / *:unsubscribe
 	// handlers (on the read-loop goroutine) flip them.
 	proxyMu                 sync.Mutex
 	proxySubscribed         bool
 	lmstudioProxySubscribed bool
+	lemonadeProxySubscribed bool
 
 	// workloadsMu guards workloadsSubscribed. The workloads:* stream is
 	// opt-in too: emitWorkloadEvent (called on the proxy reader goroutine
@@ -330,6 +334,7 @@ type workerPaths struct {
 	nodeInfo      string
 	proxy         string
 	lmstudioProxy string
+	lemonadeProxy string
 	workloadMgr   string
 	errors        string
 	engineMgr     string
@@ -369,6 +374,7 @@ func NewBroker(codec *Codec, paths workerPaths) *Broker {
 		nodeInfoPath:       paths.nodeInfo,
 		proxyPath:          paths.proxy,
 		lmstudioProxyPath:  paths.lmstudioProxy,
+		lemonadeProxyPath:  paths.lemonadeProxy,
 		workloadMgrPath:    paths.workloadMgr,
 		errorsPath:         paths.errors,
 		engineMgrPath:      paths.engineMgr,
@@ -1817,6 +1823,20 @@ func (b *Broker) Serve(ctx context.Context) error {
 		b.finishLMStudioProxyTerminal()
 	}
 
+	if b.lemonadeProxyPath != "" {
+		b.lemonadeProxySup = newSupervisor("lemonade-proxy", defaultRestartPolicy(), b.spawnLemonadeProxy)
+		b.configureLemonadeProxySupervisorCallbacks(b.lemonadeProxySup)
+		if err := b.lemonadeProxySup.Start(); err != nil {
+			slog.Warn("lemonade-proxy failed to start; continuing without local Lemonade proxy", "path", b.lemonadeProxyPath, "err", err)
+			b.lemonadeProxySup = nil
+		} else {
+			defer b.lemonadeProxySup.Stop()
+			go b.runAutoAdvertiseLemonade(ctx)
+		}
+	} else {
+		slog.Info("lemonade-proxy path not resolved; running without local Lemonade proxy")
+	}
+
 	// Restore engines and begin both advertising loops only after both proxy
 	// startup attempts have established either readiness or a terminal outcome.
 	// This prevents a restored engine from taking a persisted proxy port before
@@ -1898,6 +1918,10 @@ func (b *Broker) shutdownInferenceStack() {
 	// Stop ingress first so no new inference can arrive while engine-manager is
 	// draining engines. supervisor.Stop uses each proxy's stdin-close/join path;
 	// it never adds a parent-side kill timeout.
+	if b.lemonadeProxySup != nil {
+		b.lemonadeProxySup.Stop()
+		b.setLemonadeProxy(nil)
+	}
 	if b.lmstudioProxySup != nil {
 		b.lmstudioProxySup.Stop()
 		b.setLMStudioProxy(nil)
@@ -2903,6 +2927,41 @@ func (b *Broker) handleMessage(msg *Message) {
 			log.Printf("failed to respond to lmstudio-proxy:unsubscribe: %v", err)
 		}
 
+	case "lemonade-proxy:get-status":
+		var result ProxyStatusResult
+		if p := b.getLemonadeProxy(); p != nil {
+			result.Ready, result.Port = p.Status()
+		}
+		if err := b.codec.Respond(msg.ID, result); err != nil {
+			log.Printf("failed to respond to lemonade-proxy:get-status: %v", err)
+		}
+
+	case "lemonade-proxy:subscribe":
+		b.proxyMu.Lock()
+		wasSubscribed := b.lemonadeProxySubscribed
+		b.lemonadeProxySubscribed = true
+		b.proxyMu.Unlock()
+		if err := b.codec.Respond(msg.ID, SubscriptionResult{Subscribed: true}); err != nil {
+			log.Printf("failed to respond to lemonade-proxy:subscribe: %v", err)
+		}
+		if !wasSubscribed {
+			if p := b.getLemonadeProxy(); p != nil {
+				if rp := p.ReadyParams(); rp != nil {
+					if err := b.codec.Notify("lemonade-proxy:ready", rp); err != nil {
+						slog.Warn("emit baseline lemonade-proxy:ready failed", "err", err)
+					}
+				}
+			}
+		}
+
+	case "lemonade-proxy:unsubscribe":
+		b.proxyMu.Lock()
+		b.lemonadeProxySubscribed = false
+		b.proxyMu.Unlock()
+		if err := b.codec.Respond(msg.ID, SubscriptionResult{Subscribed: false}); err != nil {
+			log.Printf("failed to respond to lemonade-proxy:unsubscribe: %v", err)
+		}
+
 	case "workloads:subscribe":
 		b.workloadsMu.Lock()
 		b.workloadsSubscribed = true
@@ -2985,6 +3044,10 @@ func (b *Broker) handleMessage(msg *Message) {
 		// lmstudio-proxy:* is checked before proxy:* — though the prefixes
 		// don't actually overlap (lmstudio-proxy: vs proxy:), keeping it
 		// first makes the LM Studio namespace explicit.
+		if strings.HasPrefix(msg.Method, "lemonade-proxy:") {
+			b.relayToLemonadeProxy(msg)
+			return
+		}
 		if strings.HasPrefix(msg.Method, "lmstudio-proxy:") {
 			b.relayToLMStudioProxy(msg)
 			return

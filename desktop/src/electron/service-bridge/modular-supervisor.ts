@@ -207,11 +207,15 @@ function normalizeLogLevel(value: string | undefined): ModularLogLevel {
  * placeholder unresolved and the engine-manager rejects the call.
  */
 function pullModelParams(engineManagerEngine: string, model: string): JsonObject {
-    return engineManagerEngine === 'lmstudio' ? { model } : { name: model }
+    if (engineManagerEngine === 'lmstudio') return { model }
+    if (engineManagerEngine === 'lemonade') return { model_name: model, stream: true, subscribe: false }
+    return { name: model }
 }
 
 function deleteModelParams(engineManagerEngine: string, model: string): JsonObject {
-    return engineManagerEngine === 'lmstudio' ? { model } : { name: model }
+    if (engineManagerEngine === 'lmstudio') return { model }
+    if (engineManagerEngine === 'lemonade') return { model_name: model }
+    return { name: model }
 }
 
 /**
@@ -299,12 +303,15 @@ function engineManagerId(engine: ProxyEngine): string {
 function proxyEngineFromManagerId(id: string): ProxyEngine | null {
     if (id === 'ollama') return 'ollama'
     if (id === 'lmstudio') return 'lm-studio'
+    if (id === 'lemonade') return 'lemonade'
     return null
 }
 
 /** The broker relay namespace fronting an engine's reverse proxy. */
 function proxyRelayPrefix(engine: ProxyEngine): string {
-    return engine === 'ollama' ? 'proxy' : 'lmstudio-proxy'
+    if (engine === 'ollama') return 'proxy'
+    if (engine === 'lm-studio') return 'lmstudio-proxy'
+    return 'lemonade-proxy'
 }
 
 /**
@@ -827,6 +834,7 @@ class ModularSupervisor {
         passPath('--node-info-path', 'node-info')
         passPath('--proxy-path', 'proxy')
         passPath('--lmstudio-proxy-path', 'lmstudio-proxy')
+        passPath('--lemonade-proxy-path', 'lemonade-proxy')
         passPath('--workload-manager-path', 'workload-manager')
         passPath('--cluster-manager-path', 'cluster-manager')
         passPath('--settings-path', 'node-settings')
@@ -878,6 +886,7 @@ class ModularSupervisor {
         await subscribe('discovery:subscribe', 'subscribe to broker discovery')
         await subscribe('proxy:subscribe', 'subscribe to broker ollama-proxy relay')
         await subscribe('lmstudio-proxy:subscribe', 'subscribe to broker lmstudio-proxy relay')
+        await subscribe('lemonade-proxy:subscribe', 'subscribe to broker lemonade-proxy relay')
         // Engine events are opt-in and replay no baseline — subscribe then hydrate.
         await subscribe('engine:subscribe', 'subscribe to broker engine relay')
         await subscribe('workloads:subscribe', 'subscribe to broker workloads stream')
@@ -1079,7 +1088,7 @@ class ModularSupervisor {
             const obj = objectValue(result)
             if (obj && booleanValue(obj.ready)) {
                 getModularBridgeState().handleNotification({
-                    source: engine === 'ollama' ? 'proxy' : 'lmstudio-proxy',
+                    source: engine === 'ollama' ? 'proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy',
                     method: 'ready',
                     params: { port: numberValue(obj.port) }
                 })
@@ -1100,7 +1109,7 @@ class ModularSupervisor {
             if (!obj || !Array.isArray(obj.nodes)) return
             for (const node of obj.nodes) {
                 getModularBridgeState().handleNotification({
-                    source: engine === 'ollama' ? 'proxy' : 'lmstudio-proxy',
+                    source: engine === 'ollama' ? 'proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy',
                     method: 'node/discovered',
                     params: node
                 })
@@ -1271,6 +1280,8 @@ class ModularSupervisor {
                 ? 'ollama'
                 : event.source === 'lmstudio-proxy'
                   ? 'lm-studio'
+                  : event.source === 'lemonade-proxy'
+                    ? 'lemonade'
                   : null
         if (proxyEngine && event.method === 'ready') {
             // A (re)bound proxy starts with an empty manual-node set, so forget
@@ -1316,9 +1327,16 @@ class ModularSupervisor {
         this.readinessWaiters.clear()
     }
 
-    /** Rewrite broker `proxy:`/`lmstudio-proxy:` relay frames into proxy-source events. */
+    /** Rewrite broker proxy relay frames into proxy-source events. */
     private normalizeBrokerProxy(notification: JsonRpcNotification): JsonRpcNotification {
         if (notification.source !== 'broker') return notification
+        if (notification.method.startsWith('lemonade-proxy:')) {
+            return {
+                source: 'lemonade-proxy',
+                method: notification.method.slice('lemonade-proxy:'.length),
+                params: notification.params
+            }
+        }
         if (notification.method.startsWith('lmstudio-proxy:')) {
             return {
                 source: 'lmstudio-proxy',

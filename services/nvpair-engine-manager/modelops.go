@@ -51,6 +51,8 @@ func modelActionWire(engine, op, model string) (string, json.RawMessage, error) 
 		switch engine {
 		case "ollama":
 			return marshalModelAction("run_model", map[string]any{"model": model, "stream": false})
+		case "lemonade":
+			return marshalModelAction("load_model", map[string]string{"model_name": model})
 		default:
 			return marshalModelAction("load_model", map[string]string{"model": model})
 		}
@@ -58,6 +60,8 @@ func modelActionWire(engine, op, model string) (string, json.RawMessage, error) 
 		switch engine {
 		case "ollama":
 			return marshalModelAction("unload_model", map[string]any{"model": model, "keep_alive": 0})
+		case "lemonade":
+			return marshalModelAction("unload_model", map[string]string{"model_name": model})
 		default:
 			return marshalModelAction("unload_model", map[string]string{"model": model})
 		}
@@ -65,6 +69,8 @@ func modelActionWire(engine, op, model string) (string, json.RawMessage, error) 
 		switch engine {
 		case "ollama":
 			return marshalModelAction("delete_model", map[string]string{"name": model})
+		case "lemonade":
+			return marshalModelAction("delete_model", map[string]string{"model_name": model})
 		default:
 			return marshalModelAction("delete_model", map[string]string{"model": model})
 		}

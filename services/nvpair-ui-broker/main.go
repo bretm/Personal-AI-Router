@@ -26,6 +26,7 @@ func main() {
 	nodeInfoPath := flag.String("node-info-path", "", "path to nvpair-node-info binary (default: ./nvpair-node-info in the current working directory)")
 	proxyPath := flag.String("proxy-path", "", "path to ollama-proxy binary (default: ./ollama-proxy in the current working directory)")
 	lmstudioProxyPath := flag.String("lmstudio-proxy-path", "", "path to lmstudio-proxy binary (default: ./lmstudio-proxy in the current working directory)")
+	lemonadeProxyPath := flag.String("lemonade-proxy-path", "", "path to lemonade-proxy binary (default: ./lemonade-proxy in the current working directory)")
 	workloadMgrPath := flag.String("workload-manager-path", "", "path to nvpair-workload-manager binary (default: ./nvpair-workload-manager in the current working directory)")
 	errorsPath := flag.String("errors-path", "", "path to nvpair-errors binary (default: ./nvpair-errors in the current working directory)")
 	engineMgrPath := flag.String("engine-manager-path", "", "path to nvpair-engine-manager binary (default: ./nvpair-engine-manager in the current working directory)")
@@ -134,6 +135,15 @@ func main() {
 		}
 		slog.Warn("lmstudio-proxy binary not found; broker will run without local LM Studio proxy", "err", err)
 		resolvedLMStudioProxy = ""
+	}
+
+	resolvedLemonadeProxy, err := resolveLemonadeProxyPath(*lemonadeProxyPath)
+	if err != nil {
+		if *lemonadeProxyPath != "" {
+			fatalf("lemonade-proxy binary: %v", err)
+		}
+		slog.Warn("lemonade-proxy binary not found; broker will run without local Lemonade proxy", "err", err)
+		resolvedLemonadeProxy = ""
 	}
 
 	// nvpair-workload-manager is auxiliary too, resolved with the same rules:
@@ -253,6 +263,7 @@ func main() {
 		nodeInfo:      resolvedNodeInfo,
 		proxy:         resolvedProxy,
 		lmstudioProxy: resolvedLMStudioProxy,
+		lemonadeProxy: resolvedLemonadeProxy,
 		workloadMgr:   resolvedWorkloadMgr,
 		errors:        resolvedErrors,
 		engineMgr:     resolvedEngineMgr,
@@ -318,6 +329,10 @@ func resolveProxyPath(override string) (string, error) {
 // Studio proxy" rather than aborting the broker.
 func resolveLMStudioProxyPath(override string) (string, error) {
 	return resolveSiblingBinary(override, "lmstudio-proxy", "--lmstudio-proxy-path")
+}
+
+func resolveLemonadeProxyPath(override string) (string, error) {
+	return resolveSiblingBinary(override, "lemonade-proxy", "--lemonade-proxy-path")
 }
 
 // resolveWorkloadManagerPath mirrors resolveProxyPath for the

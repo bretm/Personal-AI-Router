@@ -1,0 +1,242 @@
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+# Lemonade Engine Integration
+
+PAIR does not currently support Lemonade. This page records the implementation
+plan for adding it as a supported engine. It is written for contributors; it
+does not describe behavior available in a released build.
+
+Lemonade must be a separate engine identity even though it serves
+OpenAI-compatible and Ollama-compatible requests. Protocol compatibility does
+not make model IDs, lifecycle, inventory, errors, or security policy
+interchangeable.
+
+## Engine Identity and Routing
+
+The integration uses these values consistently across services, discovery, the
+desktop application, and the terminal interface:
+
+| Item | Value |
+| --- | --- |
+| PAIR engine ID | `lemonade` |
+| Display name | Lemonade |
+| Discovery service | `le` |
+| Proxy process and broker relay | `lemonade-proxy` |
+| Default PAIR facade port | `13305` |
+| First PAIR-managed Lemonade port | `13306` |
+| Model matching | Exact Lemonade model ID |
+
+Lemonade's facade accepts its OpenAI-compatible inference surface. An
+application sends a request to its local PAIR endpoint; the proxy selects one
+eligible Lemonade node, serves locally or forwards the complete request over
+PAIR's mTLS connection, and streams the response back. The request runs on one
+machine. PAIR does not combine memory, shard a model, share a KV cache, or split
+token generation between machines.
+
+A routing group contains only Lemonade nodes advertising the requested exact
+model ID. An Ollama or LM Studio node is not a substitute merely because it has
+a similarly named model or accepts an OpenAI-shaped request. A Strix Halo and an
+RTX 5090 can share a Lemonade routing group only when both run Lemonade and have
+the same Lemonade model ID available.
+
+### Model Capability Eligibility
+
+Model identity establishes a possible routing group, but does not make every
+owner eligible for every request. A node must advertise the model's effective
+runtime capabilities, including its available context window, output limit,
+modalities, and request features such as tools or structured output.
+
+Before ranking a node, the proxy filters the group by the request's required
+capacity. For a text request, that is the conversation, system prompt, tool
+definitions, and requested output allowance. PAIR uses the engine's matching
+tokenizer where available, and otherwise a conservative estimate. An omitted
+output limit uses the engine's configured maximum for this check.
+
+For example, a 42K-token request can use a node configured for 64K context but
+not a node configured for 32K, even if both report `Qwen3-8B`. Two context
+windows do not add together. If no node can safely accept the request, the
+facade returns a capacity error before forwarding it. Unknown capability data is
+not eligible for a request that might exceed it.
+
+After filtering, the existing scheduler inputs—manual priority, pending work,
+GPU pressure, and local reservations—rank the remaining nodes. A response that
+has already started streaming is never replayed on another node. Retry and
+failover follow the existing safe pre-response rules.
+
+## Lifecycle and Ports
+
+PAIR first supports an externally installed Lemonade server. It detects and
+adopts a running `lemond` without taking ownership of the process. A later
+managed-install feature is enabled per platform only after PAIR can obtain a
+versioned, checksum-verified, unprivileged artifact with all required notices.
+
+For a PAIR-managed instance, launch:
+
+```text
+lemond --host 127.0.0.1 --port {port}
+```
+
+The proxy takes the conventional Lemonade client port `13305`; the managed
+engine begins at `13306`. If an externally started Lemonade server owns `13305`,
+PAIR adopts it, leaves it in place, and moves the proxy to a free port. It shows
+that actual endpoint to the user. PAIR never calls Lemonade's private
+`/internal/*` surface to take over an existing server.
+
+The engine-manager manifest owns platform-specific detection, launch, stop,
+port, readiness, and health behavior. It must:
+
+- use `GET /live` for liveness and `GET /v1/health` for identity and version;
+- validate a Lemonade-shaped health body rather than treating any HTTP 200 as
+  Lemonade;
+- treat a 401 as a credential condition, not positive identity evidence;
+- bind PAIR-launched processes only to loopback; and
+- never stop or move an adopted process-mode instance.
+
+The initial compatibility range is `>=11.6.0 <12.0.0`. A missing, malformed,
+older, or new-major version remains visible to the user but is excluded from
+routing with an actionable error. Expand the range only after contract tests
+against the new release.
+
+## Proxy and Model Management Design
+
+The existing Ollama and LM Studio proxies duplicate routing, discovery, mTLS,
+streaming, cancellation, workload reporting, port persistence, and JSON-RPC
+control. Lemonade must not create a third copy. Extract that behavior into a
+deep `services/shared/routingproxy` module and retain three thin executables:
+`ollama-proxy`, `lmstudio-proxy`, and `lemonade-proxy`.
+
+Each executable supplies only an engine profile and a protocol adapter. The
+shared module owns listening, plaintext and mTLS ingress, discovery, candidate
+ordering, reservations, failover, cancellation, workload events, and persisted
+ports. An adapter classifies routes, extracts a model ID without logging request
+content, merges inventory, normalizes IDs, and applies final-hop header rules.
+
+The first Lemonade proxy release supports:
+
+- `POST /v1/chat/completions`
+- `POST /v1/completions`
+- `POST /v1/embeddings`
+- `POST /v1/responses`
+- `GET /v1/models`, merged by exact `data[].id`
+
+The inventory merger excludes records with `recipe: "cloud"`; PAIR must not
+silently turn local routing into third-party cloud offload. It explicitly
+refuses Lemonade's node-mutating, private, administrative, configuration, and
+download paths. Audio, image, 3D, classification, and realtime paths need
+dedicated request-shape, cancellation, privacy, and streaming tests before they
+are routed.
+
+The engine-manager remains PAIR's only model-management interface. Keep simple
+lifecycle behavior in the manifest and add a private model-driver seam for
+engine-specific model behavior:
+
+```go
+type ModelDriver interface {
+    Snapshot(context.Context) (ModelSnapshot, error)
+    Pull(context.Context, ModelRef, ProgressSink) error
+    Load(context.Context, string) error
+    Unload(context.Context, string) error
+    Delete(context.Context, string) error
+}
+```
+
+The Lemonade driver maps installed inventory to `GET /v1/models`, loaded
+inventory to `GET /v1/health`, downloads to `POST /v1/pull` plus
+`GET /v1/downloads`, and load, unload, and delete to their corresponding native
+`/v1` operations. Pull progress is reconciled from Lemonade's server-owned job
+IDs, so it survives a renderer or proxy restart. Search and variant selection
+use `/v1/registry/search` and `/v1/pull/variants` through typed
+engine-manager RPCs; the desktop does not receive engine-specific payloads.
+
+## Security and Cluster Integration
+
+PAIR does not expose `lemond` to the LAN. Applications use the loopback facade;
+paired nodes use the proxy's mTLS listener; the destination proxy calls only its
+own loopback Lemonade server.
+
+When `LEMONADE_API_KEY` is present in PAIR's process environment, the local
+engine-manager and proxy use it for regular Lemonade API calls. The key is
+node-local: never put it in JSON-RPC, discovery, settings, workloads,
+diagnostics, or logs, and never forward it to another node. Remove a client's
+`Authorization` header before peer forwarding and inject the destination node's
+credential only for the final loopback call. PAIR does not use Lemonade admin
+endpoints or require `LEMONADE_ADMIN_API_KEY`.
+
+Add `ServiceLemonade = "le"` to `services/shared/noderec`. The scanner carries
+Lemonade inventories through its existing per-engine fields. The broker replaces
+its fixed Ollama and LM Studio proxy pairs with a closed registry of engine
+planes. A plane includes the engine ID, discovery key, process name, binary
+path, default ports, readiness, supervision, advertising, and port-coordination
+state. It is built into PAIR; this does not create a user-defined engine plugin
+surface.
+
+The broker advertises Lemonade only when the manager reports a valid loopback
+server, its identity and version probe pass, `lemonade-proxy` reports a listener,
+and proxy and engine ports differ. Manual-node probing validates Lemonade health
+before reading `/v1/models` and bridges a reachable manual Lemonade node only to
+`lemonade-proxy`.
+
+## Repository Changes and Verification
+
+The implementation changes these areas together:
+
+- `services/shared/routingproxy`, the two existing proxies, and the new
+  `services/lemonade-proxy` module;
+- `services/shared/noderec`, `nvpair-engine-manager`, `nvpair-ui-broker`, and
+  `nvpair-manual-nodes`;
+- the desktop engine descriptors, service bridge, model UI, terminal views,
+  icons, build inventory, installers, versions, BOM, and notices; and
+- JSON-RPC producers, broker relays, consumers, tests, and generated contract
+  documentation whenever a method or payload changes.
+
+Adding `lemonade-proxy` changes the shipped inventory from thirteen to fourteen
+binaries and the broker-supervised startup set from eleven to twelve workers.
+Update every count and enumerated list. Electron continues to start only
+`nvpair-ui-broker`.
+
+Implement and verify the work in this order:
+
+1. Extract the shared proxy and engine-plane registry while proving Ollama and
+   LM Studio behavior is unchanged.
+2. Add Lemonade discovery, identity/version checks, inference routing,
+   capability-aware inventory, build integration, and desktop/terminal display.
+3. Add native model lifecycle, durable download reconciliation, remote control,
+   search, and variants.
+4. Add managed installation only for validated, checksum-pinned platform
+   artifacts.
+5. Add further modalities only after their dedicated proxy tests exist.
+
+Tests must cover identity and version validation, authorization, exact-ID and
+capability eligibility, context limits, inventory merge order, cloud exclusion,
+local and mTLS inference, streaming, cancellation, safe failover, manual nodes,
+port ownership, restart/replay, and credential non-disclosure. Run the existing
+Ollama and LM Studio suites unchanged against the shared routing module. Before
+review, run the affected Go tests and cross-process coverage, desktop lint,
+typecheck, unit tests, dead-code check, service-contract check, the SPDX
+checker, and the service version checks.
+
+## Lemonade Compatibility and References
+
+This plan targets Lemonade 11.6.x. Lemonade's default server is `lemond` on
+loopback port `13305`; it exposes OpenAI-compatible inference and model listing
+under `/v1`. Its native management API supplies `/v1/pull`, `/v1/downloads`,
+`/v1/load`, `/v1/unload`, `/v1/delete`, `/v1/registry/search`, and
+`/v1/pull/variants`. Its health response also reports loaded models. PAIR uses
+only documented public endpoints and leaves private `/internal/*` endpoints
+alone.
+
+Lemonade is Apache-2.0 and includes third-party notices. Any future
+PAIR-managed installer pins an exact release asset and SHA-256 digest and
+retains the applicable license and notice material; it does not use a moving
+`latest` release URL.
+
+- [Lemonade repository and platform matrix](https://github.com/lemonade-sdk/lemonade)
+- [OpenAI-compatible API](https://github.com/lemonade-sdk/lemonade/blob/main/docs/api/openai.md)
+- [Lemonade model and health API](https://github.com/lemonade-sdk/lemonade/blob/main/docs/api/lemonade.md)
+- [Server configuration and authentication](https://github.com/lemonade-sdk/lemonade/blob/main/docs/guide/configuration/README.md)
+- [`lemond` lifecycle](https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/getting-started.md)
+- [Installation guide](https://github.com/lemonade-sdk/lemonade/blob/main/docs/guide/install/README.md)
+- [License and third-party notices](https://github.com/lemonade-sdk/lemonade/blob/main/LICENSE)

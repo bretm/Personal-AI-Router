@@ -22,6 +22,7 @@ const (
 	// real port is resolved per poll via localEnginePort.
 	defaultOllamaPort   = 11434
 	defaultLMStudioPort = 1234
+	defaultLemonadePort = 13305
 
 	// engineManagerHTTPPort is the fixed LAN port the broker tells
 	// nvpair-engine-manager to serve its HTTP surface (/v1/models) on, and the port
@@ -181,6 +182,33 @@ func (b *Broker) reconcileAdvertiseLMStudio(client *http.Client) {
 	}
 }
 
+func (b *Broker) runAutoAdvertiseLemonade(ctx context.Context) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(autoAdvertiseInterval)
+	defer ticker.Stop()
+	for {
+		b.reconcileAdvertiseLemonade(client)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (b *Broker) reconcileAdvertiseLemonade(client *http.Client) {
+	enginePort, probe := b.localEnginePort("lemonade", defaultLemonadePort)
+	proxyPort := b.lemonadeProxyListenPort()
+	up := probe && proxyPort != 0 && enginePort != proxyPort && checkLemonadeHealth(client, enginePort)
+	if up {
+		b.registerService(noderec.RegisterParams{Service: noderec.ServiceLemonade, Port: proxyPort})
+		b.setProxyLocalBackend(b.getLemonadeProxy(), "lemonade", enginePort, true)
+	} else {
+		b.unregisterService(noderec.ServiceLemonade)
+		b.setProxyLocalBackend(b.getLemonadeProxy(), "lemonade", enginePort, false)
+	}
+}
+
 // proxyLocalBackend is the node/set-local-backend payload: the loopback engine
 // the proxy's cluster mTLS ingress forwards to, and the proxy's own self
 // candidate on the local routing path.
@@ -261,6 +289,15 @@ func (b *Broker) lmstudioProxyListenPort() int {
 	return 0
 }
 
+func (b *Broker) lemonadeProxyListenPort() int {
+	if p := b.getLemonadeProxy(); p != nil {
+		if ready, port := p.Status(); ready {
+			return port
+		}
+	}
+	return 0
+}
+
 // checkOllamaHealth reports whether a local ollama server is answering on the
 // given port. A plain GET of the root that returns 200 is ollama's liveness
 // convention. The port is resolved per poll (see
@@ -285,5 +322,14 @@ func checkLMStudioHealth(client *http.Client, port int) bool {
 		return false
 	}
 	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func checkLemonadeHealth(client *http.Client, port int) bool {
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/v1/health", port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }
