@@ -46,6 +46,27 @@ func TestRunningEnginePort(t *testing.T) {
 	}
 }
 
+func TestRunningHealthyEnginePort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		port int
+		ok   bool
+	}{
+		{name: "healthy", raw: `{"running":true,"healthy":true,"port":13305}`, port: 13305, ok: true},
+		{name: "unhealthy", raw: `{"running":true,"healthy":false,"port":13305}`},
+		{name: "stopped", raw: `{"running":false,"healthy":true,"port":13305}`},
+		{name: "malformed", raw: `{`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port, ok := runningHealthyEnginePort([]byte(tc.raw))
+			if port != tc.port || ok != tc.ok {
+				t.Fatalf("runningHealthyEnginePort = (%d, %v), want (%d, %v)", port, ok, tc.port, tc.ok)
+			}
+		})
+	}
+}
+
 func TestLMStudioFallbackNeverAdvertisesItsProxy(t *testing.T) {
 	proxyClient, proxyServer := net.Pipe()
 	defer proxyClient.Close()

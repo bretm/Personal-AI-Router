@@ -183,11 +183,10 @@ func (b *Broker) reconcileAdvertiseLMStudio(client *http.Client) {
 }
 
 func (b *Broker) runAutoAdvertiseLemonade(ctx context.Context) {
-	client := &http.Client{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(autoAdvertiseInterval)
 	defer ticker.Stop()
 	for {
-		b.reconcileAdvertiseLemonade(client)
+		b.reconcileAdvertiseLemonade()
 		select {
 		case <-ctx.Done():
 			return
@@ -196,10 +195,12 @@ func (b *Broker) runAutoAdvertiseLemonade(ctx context.Context) {
 	}
 }
 
-func (b *Broker) reconcileAdvertiseLemonade(client *http.Client) {
-	enginePort, probe := b.localEnginePort("lemonade", defaultLemonadePort)
+func (b *Broker) reconcileAdvertiseLemonade() {
+	// engine-manager owns the authenticated health request. The broker receives
+	// only its status result and never resolves or handles the Lemonade secret.
+	enginePort, healthy := b.localHealthyEnginePort("lemonade")
 	proxyPort := b.lemonadeProxyListenPort()
-	up := probe && proxyPort != 0 && enginePort != proxyPort && checkLemonadeHealth(client, enginePort)
+	up := healthy && proxyPort != 0 && enginePort != proxyPort
 	if up {
 		b.registerService(noderec.RegisterParams{Service: noderec.ServiceLemonade, Port: proxyPort})
 		b.setProxyLocalBackend(b.getLemonadeProxy(), "lemonade", enginePort, true)
@@ -265,6 +266,36 @@ func runningEnginePort(result json.RawMessage) (int, bool) {
 	return st.Port, true
 }
 
+// localHealthyEnginePort is the authenticated-engine variant used by
+// Lemonade. It deliberately has no stock-port fallback: without engine-manager
+// there is no component authorized to resolve the node-local credential.
+func (b *Broker) localHealthyEnginePort(engine string) (int, bool) {
+	em := b.getEngineMgr()
+	if em == nil {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	params, _ := json.Marshal(map[string]string{"engine": engine})
+	result, rpcErr, err := em.Call(ctx, "engine:status", params)
+	if err != nil || rpcErr != nil {
+		return 0, false
+	}
+	return runningHealthyEnginePort(result)
+}
+
+func runningHealthyEnginePort(result json.RawMessage) (int, bool) {
+	var status struct {
+		Running bool `json:"running"`
+		Healthy bool `json:"healthy"`
+		Port    int  `json:"port"`
+	}
+	if json.Unmarshal(result, &status) != nil || !status.Running || !status.Healthy || status.Port <= 0 {
+		return 0, false
+	}
+	return status.Port, true
+}
+
 // proxyListenPort returns the ollama-proxy's current listen port, or 0 if no
 // proxy is supervised or it hasn't reported ready yet. Used to refuse
 // advertising Ollama at the proxy's own port and creating a self-forward loop.
@@ -322,14 +353,5 @@ func checkLMStudioHealth(client *http.Client, port int) bool {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-func checkLemonadeHealth(client *http.Client, port int) bool {
-	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/v1/health", port))
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
 }

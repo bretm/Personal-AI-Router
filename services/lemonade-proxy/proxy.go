@@ -28,7 +28,9 @@ import (
 	"nvpair-shared/applog"
 	"nvpair-shared/clustertrust"
 	"nvpair-shared/cors"
+	"nvpair-shared/engineauth"
 	"nvpair-shared/errors"
+	"nvpair-shared/meshauth"
 	"nvpair-shared/netmon"
 	"nvpair-shared/netpick"
 	"nvpair-shared/nodeactivity"
@@ -335,6 +337,12 @@ type Proxy struct {
 	// nil = unclustered: the LAN TLS ingress accepts nothing and the node does
 	// only loopback-plaintext local routing. Read-only after startup.
 	mesh *clustertrust.Mesh
+	// meshAuth protects the local client-facing plaintext entry point. Engine
+	// credentials are separate, node-local secrets applied only at a terminal
+	// loopback hop.
+	meshAuth        *meshauth.Registry
+	engineAuth      engineauth.Config
+	credentialStore engineauth.Store
 
 	// backendMu guards backend, the explicit loopback engine the cluster mTLS
 	// ingress forwards to. The broker sets/clears it via node/set-local-backend;
@@ -701,6 +709,19 @@ type candidate struct {
 	id       string
 	url      *url.URL
 	peerUUID string
+	local    bool
+}
+
+// prepareCandidateRequest strips all caller credentials before forwarding.
+// Only this node's explicit loopback engine receives this node's credential;
+// peers authenticate with mTLS and manual nodes never receive a local secret.
+func (p *Proxy) prepareCandidateRequest(req *http.Request, cand candidate) error {
+	engineauth.StripInbound(req.Header, p.engineAuth)
+	if !cand.local {
+		return nil
+	}
+	_, err := engineauth.Apply(req, p.engineAuth, p.credentialStore)
+	return err
 }
 
 // candidateTransport returns the reverse-proxy / model-list transport for a
@@ -805,9 +826,10 @@ type modelListItem struct {
 }
 
 type modelListResult struct {
-	items []modelListItem
-	ok    bool
-	err   error
+	items      []modelListItem
+	ok         bool
+	credential bool
+	err        error
 }
 
 // serveModelList queries every Lemonade candidate concurrently and returns
@@ -835,6 +857,11 @@ func (p *Proxy) serveModelList(w http.ResponseWriter, r *http.Request, candidate
 			continue
 		}
 		upstream.Header.Set("Accept", "application/json")
+		if err := p.prepareCandidateRequest(upstream, cand); err != nil {
+			results[i].credential = true
+			results[i].err = err
+			continue
+		}
 
 		// A cluster-peer candidate is queried over mTLS to its promoted proxy;
 		// self/manual candidates use the shared plain client.
@@ -854,6 +881,9 @@ func (p *Proxy) serveModelList(w http.ResponseWriter, r *http.Request, candidate
 			}
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
+				if resp.StatusCode == http.StatusUnauthorized {
+					results[i].credential = true
+				}
 				results[i].err = fmt.Errorf("upstream returned %s", resp.Status)
 				return
 			}
@@ -920,6 +950,12 @@ func (p *Proxy) serveModelList(w http.ResponseWriter, r *http.Request, candidate
 		}
 	}
 	if !success {
+		for _, result := range results {
+			if result.credential {
+				writeJSON(http.StatusUnauthorized, []byte(`{"error":"local engine credential is missing or was rejected","code":"engine-credential"}`))
+				return http.StatusUnauthorized, fmt.Errorf("engine credential is missing or was rejected")
+			}
+		}
 		err := fmt.Errorf("no valid model list from %d candidate(s)", len(candidates))
 		writeJSON(http.StatusServiceUnavailable, []byte(`{"error":"model inventory unavailable"}`))
 		return http.StatusServiceUnavailable, err
@@ -1130,6 +1166,10 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		last := i == len(candidates)-1
 		if bodyBytes != nil {
 			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+		if err := p.prepareCandidateRequest(r, cand); err != nil {
+			writeIngressError(w, http.StatusUnauthorized, "engine-credential", "local engine credential is required but not configured")
+			return
 		}
 		retry := false
 		sc := &statusCapture{ResponseWriter: w, status: http.StatusOK, idle: idleClientWriteTimeout}
@@ -1389,6 +1429,7 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 			return
 		}
 		peerUUID := ""
+		local := false
 		switch {
 		case isSelfTarget(u, selfPort):
 			// Our own advertised endpoint (lm now points at this proxy). Serve
@@ -1401,6 +1442,7 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 				return
 			}
 			u = lb
+			local = true
 		case p.mesh.HasPin(n.ClusterUUID):
 			// A pinned cluster peer: reach it only over mTLS to its promoted
 			// proxy (the lm port now advertises the proxy, not the engine).
@@ -1438,6 +1480,7 @@ func (p *Proxy) resolveCandidates(model string) []candidate {
 			id:       n.ID,
 			url:      u,
 			peerUUID: peerUUID,
+			local:    local,
 		})
 	}
 

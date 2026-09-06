@@ -137,6 +137,7 @@ $PairProcs = @(
     'ollama-proxy',
     'lmstudio-proxy',
     'lemonade-proxy',
+    'lemonade-proxy',
     'nvpair-node-info',
     'nvpair-node-scanner',
     'nvpair-manual-nodes',

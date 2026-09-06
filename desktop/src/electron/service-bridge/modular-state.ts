@@ -730,7 +730,13 @@ function parseProxyNode(params: JsonValue | undefined, engine: ProxyEngine): Mod
     }
     return {
         id,
-        sources: [engine === 'ollama' ? 'ollama-proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy'],
+        sources: [
+            engine === 'ollama'
+                ? 'ollama-proxy'
+                : engine === 'lm-studio'
+                  ? 'lmstudio-proxy'
+                  : 'lemonade-proxy'
+        ],
         // `Node.Host` is the hostname; empty for the self-bridge manual node,
         // in which case the broker discovery entry supplies the display name on
         // merge (see mergeNode). Never fall back to the UUID id here.
@@ -2338,7 +2344,14 @@ class ModularBridgeState {
         if (notification.method === 'node/discovered' || notification.method === 'node/updated') {
             const node = parseProxyNode(notification.params, engine)
             if (!node) return
-            this.upsertNode(node, engine === 'ollama' ? 'ollama-proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy')
+            this.upsertNode(
+                node,
+                engine === 'ollama'
+                    ? 'ollama-proxy'
+                    : engine === 'lm-studio'
+                      ? 'lmstudio-proxy'
+                      : 'lemonade-proxy'
+            )
         }
     }
 
@@ -2350,7 +2363,12 @@ class ModularBridgeState {
     private clearNodeEngine(nodeId: string, engine: ProxyEngine): void {
         const existing = this.nodes.get(nodeId)
         if (!existing) return
-        const source: BrokerNodeSource = engine === 'ollama' ? 'ollama-proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy'
+        const source: BrokerNodeSource =
+            engine === 'ollama'
+                ? 'ollama-proxy'
+                : engine === 'lm-studio'
+                  ? 'lmstudio-proxy'
+                  : 'lemonade-proxy'
         const sources = removeSource(existing.sources, source)
         if (sources.length === 0 && !existing.nodeInfoUp) {
             this.removeNodeEntry(nodeId)

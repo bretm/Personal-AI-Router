@@ -122,6 +122,96 @@ func TestMissingEngineCredentialIsActionableAndSecretFree(t *testing.T) {
 	}
 }
 
+func TestLemonadeCredentialCoversHealthInventoryAndManagement(t *testing.T) {
+	const secret = "lemonade-test-secret"
+	t.Setenv("LEMONADE_API_KEY", secret)
+	var mu sync.Mutex
+	seen := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+secret {
+			http.Error(w, "credential required", http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		seen[r.URL.Path]++
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/v1/health":
+			_, _ = w.Write([]byte(`{"all_models_loaded":[{"model_name":"model-a"}]}`))
+		case "/v1/models":
+			_, _ = w.Write([]byte(`{"data":[{"id":"model-a"}]}`))
+		case "/v1/pull":
+			_, _ = w.Write([]byte("{\"status\":\"complete\"}\n"))
+		default:
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewRegistry()
+	if err := reg.LoadFS(bundledManifests, "manifests"); err != nil {
+		t.Fatal(err)
+	}
+	bundled, ok := reg.Get("lemonade")
+	if !ok {
+		t.Fatal("lemonade manifest not loaded")
+	}
+	manifest := *bundled
+	platform := bundled.Platforms[authHostKey()]
+	platform.Runtime.Port = port
+	manifest.Platforms = map[string]Platform{authHostKey(): platform}
+
+	executor := newTestExecutor(t, &manifest)
+	// The environment value must win over a conflicting native-store value.
+	executor.credentialStore = testCredentialStore{"engine.lemonade.api_key": "wrong-store-secret"}
+	state, err := executor.state("lemonade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.running = true
+	state.port = port
+	if !executor.probe(context.Background(), platform.Runtime.Ready, port, &manifest) {
+		t.Fatal("authenticated readiness probe failed")
+	}
+	if !executor.probe(context.Background(), platform.Runtime.Health, port, &manifest) {
+		t.Fatal("authenticated health probe failed")
+	}
+	if _, err := executor.Action(context.Background(), "lemonade", "list_models", nil); err != nil {
+		t.Fatalf("list_models: %v", err)
+	}
+	if _, err := executor.Action(context.Background(), "lemonade", "loaded_models", nil); err != nil {
+		t.Fatalf("loaded_models: %v", err)
+	}
+	if _, err := executor.ModelLoad(context.Background(), "lemonade", "model-a"); err != nil {
+		t.Fatalf("load_model: %v", err)
+	}
+	if _, err := executor.ModelUnload(context.Background(), "lemonade", "model-a"); err != nil {
+		t.Fatalf("unload_model: %v", err)
+	}
+	if _, err := executor.ModelDelete(context.Background(), "lemonade", "model-a"); err != nil {
+		t.Fatalf("delete_model: %v", err)
+	}
+	if _, err := executor.PullModelStream(context.Background(), "lemonade", "model-a", nil); err != nil {
+		t.Fatalf("pull_model: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, path := range []string{"/v1/health", "/v1/models", "/v1/load", "/v1/unload", "/v1/delete", "/v1/pull"} {
+		if seen[path] == 0 {
+			t.Errorf("authenticated request did not reach %s", path)
+		}
+	}
+}
+
 func authHostKey() string {
 	return runtime.GOOS + "/" + runtime.GOARCH
 }

@@ -491,6 +491,31 @@ func TestLMStudioManifestBindsLoopback(t *testing.T) {
 	}
 }
 
+func TestLemonadeManifestUsesNodeLocalBearerCredential(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.LoadFS(bundledManifests, "manifests"); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := reg.Get("lemonade")
+	if !ok {
+		t.Fatal("lemonade manifest not loaded")
+	}
+	if m.Auth.Scheme != engineauth.SchemeBearer {
+		t.Errorf("auth scheme = %q, want bearer-token", m.Auth.Scheme)
+	}
+	if m.Auth.Credential != "engine.lemonade.api_key" {
+		t.Errorf("credential reference = %q", m.Auth.Credential)
+	}
+	if m.Auth.Environment != "LEMONADE_API_KEY" {
+		t.Errorf("environment override = %q", m.Auth.Environment)
+	}
+	for key, platform := range m.Platforms {
+		if platform.Runtime.Bind != "127.0.0.1" {
+			t.Errorf("%s: runtime.bind = %q, want 127.0.0.1", key, platform.Runtime.Bind)
+		}
+	}
+}
+
 func TestLMStudioManifestUsesNativeSystemInventory(t *testing.T) {
 	reg := NewRegistry()
 	if err := reg.LoadFS(bundledManifests, "manifests"); err != nil {

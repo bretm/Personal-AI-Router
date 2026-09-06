@@ -4,7 +4,7 @@
 
 # build.sh — NVIDIA Personal AI Router build script for Linux and macOS.
 #
-# Mirrors build.bat. Reads versions.json with jq, builds the thirteen worker
+# Mirrors build.bat. Reads versions.json with jq, builds the fourteen service
 # binaries with -X main.Version=... ldflags, then copies them into the
 # repo-root staging bundle at:
 #

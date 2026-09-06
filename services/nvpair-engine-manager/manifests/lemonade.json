@@ -2,6 +2,11 @@
   "engine": "lemonade",
   "display_name": "Lemonade",
   "manifest_version": 1,
+  "auth": {
+    "scheme": "bearer-token",
+    "credential": "engine.lemonade.api_key",
+    "environment": "LEMONADE_API_KEY"
+  },
   "runtime": {
     "args": ["--host", "{host}", "--port", "{port}"],
     "bind": "127.0.0.1",

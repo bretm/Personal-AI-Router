@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"nvpair-shared/applog"
@@ -40,6 +39,11 @@ func (b *Broker) configureLemonadeProxySupervisorCallbacks(sup *supervisor) {
 
 func (b *Broker) spawnLemonadeProxy() (supervisedHandle, error) {
 	args := b.clusterDirArgs()
+	authArgs := b.engineProxyAuthArgs("lemonade")
+	if len(authArgs) == 0 {
+		return nil, fmt.Errorf("Lemonade authentication configuration is unavailable")
+	}
+	args = append(args, authArgs...)
 	// An adopted lemond normally owns its documented :13305. Preserve it and
 	// put PAIR's facade on the adjacent port instead of competing for it.
 	if !tcpPortAvailable(defaultLemonadePort) {
@@ -74,7 +78,7 @@ func (b *Broker) forwardLemonadeProxyNotification(method string, params json.Raw
 		return
 	}
 	if method == "ready" {
-		go b.reconcileAdvertiseLemonade(&http.Client{})
+		go b.reconcileAdvertiseLemonade()
 	}
 	b.proxyMu.Lock()
 	subscribed := b.lemonadeProxySubscribed

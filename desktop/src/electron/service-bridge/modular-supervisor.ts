@@ -208,7 +208,8 @@ function normalizeLogLevel(value: string | undefined): ModularLogLevel {
  */
 function pullModelParams(engineManagerEngine: string, model: string): JsonObject {
     if (engineManagerEngine === 'lmstudio') return { model }
-    if (engineManagerEngine === 'lemonade') return { model_name: model, stream: true, subscribe: false }
+    if (engineManagerEngine === 'lemonade')
+        return { model_name: model, stream: true, subscribe: false }
     return { name: model }
 }
 
@@ -1088,7 +1089,12 @@ class ModularSupervisor {
             const obj = objectValue(result)
             if (obj && booleanValue(obj.ready)) {
                 getModularBridgeState().handleNotification({
-                    source: engine === 'ollama' ? 'proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy',
+                    source:
+                        engine === 'ollama'
+                            ? 'proxy'
+                            : engine === 'lm-studio'
+                              ? 'lmstudio-proxy'
+                              : 'lemonade-proxy',
                     method: 'ready',
                     params: { port: numberValue(obj.port) }
                 })
@@ -1109,7 +1115,12 @@ class ModularSupervisor {
             if (!obj || !Array.isArray(obj.nodes)) return
             for (const node of obj.nodes) {
                 getModularBridgeState().handleNotification({
-                    source: engine === 'ollama' ? 'proxy' : engine === 'lm-studio' ? 'lmstudio-proxy' : 'lemonade-proxy',
+                    source:
+                        engine === 'ollama'
+                            ? 'proxy'
+                            : engine === 'lm-studio'
+                              ? 'lmstudio-proxy'
+                              : 'lemonade-proxy',
                     method: 'node/discovered',
                     params: node
                 })
@@ -1282,7 +1293,7 @@ class ModularSupervisor {
                   ? 'lm-studio'
                   : event.source === 'lemonade-proxy'
                     ? 'lemonade'
-                  : null
+                    : null
         if (proxyEngine && event.method === 'ready') {
             // A (re)bound proxy starts with an empty manual-node set, so forget
             // what we think we bridged and re-push the local node if applicable.

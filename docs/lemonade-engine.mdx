@@ -5,9 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Lemonade Engine Integration
 
-PAIR does not currently support Lemonade. This page records the implementation
-plan for adding it as a supported engine. It is written for contributors; it
-does not describe behavior available in a released build.
+The `amd-auth-lemonade` integration branch supports Lemonade as an independent
+engine plane. This page describes that integration and records the remaining
+design work before it can move to a release branch.
 
 Lemonade must be a separate engine identity even though it serves
 OpenAI-compatible and Ollama-compatible requests. Protocol compatibility does
@@ -157,13 +157,14 @@ PAIR does not expose `lemond` to the LAN. Applications use the loopback facade;
 paired nodes use the proxy's mTLS listener; the destination proxy calls only its
 own loopback Lemonade server.
 
-When `LEMONADE_API_KEY` is present in PAIR's process environment, the local
-engine-manager and proxy use it for regular Lemonade API calls. The key is
-node-local: never put it in JSON-RPC, discovery, settings, workloads,
-diagnostics, or logs, and never forward it to another node. Remove a client's
-`Authorization` header before peer forwarding and inject the destination node's
-credential only for the final loopback call. PAIR does not use Lemonade admin
-endpoints or require `LEMONADE_ADMIN_API_KEY`.
+Lemonade authentication uses the `engine.lemonade.api_key` credential reference.
+`LEMONADE_API_KEY`, when present in PAIR's process environment, takes precedence
+over that node's native-store value. The key is node-local: never put it in
+JSON-RPC, discovery, settings, workloads, diagnostics, or logs, and never
+forward it to another node. The entry proxy validates and removes the client's
+PAIR token before peer forwarding; the destination injects its own Lemonade
+credential only for the final loopback call. PAIR neither calls administrative
+endpoints nor asks for a separate administrative credential.
 
 Add `ServiceLemonade = "le"` to `services/shared/noderec`. The scanner carries
 Lemonade inventories through its existing per-engine fields. The broker replaces
