@@ -143,6 +143,10 @@ const (
 	// workloadEngine is the opaque engine identifier carried in every
 	// workload this proxy produces. This proxy only ever fronts Lemonade.
 	workloadEngine = "lemonade"
+
+	// discoveryService is shared by relay subscription and node projection so
+	// the proxy cannot subscribe to one engine service while resolving another.
+	discoveryService = noderec.ServiceLemonade
 )
 
 // inferenceEndpoints is the set of request paths that count as cluster
@@ -485,11 +489,11 @@ func (p *Proxy) Run(ctx context.Context) error {
 	}
 
 	// Routing targets come from the broker's discovery relay. Subscribe
-	// for lm nodes; they arrive as discovery:nodes snapshots (handled in
+	// for Lemonade nodes; they arrive as discovery:nodes snapshots (handled in
 	// handleMessage), each replacing the subscribed overlay. Non-fatal: if the
 	// parent isn't a relay-aware broker the proxy still routes to manual nodes.
-	slog.Debug("subscribing to discovery relay for routing targets", "service", string(noderec.ServiceLMStudio))
-	if err := p.codec.Notify(noderec.MethodSubscribe, noderec.SubscribeParams{Services: []noderec.ServiceKey{noderec.ServiceLMStudio}}); err != nil {
+	slog.Debug("subscribing to discovery relay for routing targets", "service", string(discoveryService))
+	if err := p.codec.Notify(noderec.MethodSubscribe, noderec.SubscribeParams{Services: []noderec.ServiceKey{discoveryService}}); err != nil {
 		slog.Warn("failed to subscribe to discovery relay", "err", err)
 	}
 
@@ -1808,11 +1812,11 @@ func (p *Proxy) SetPrioritySnapshot(priority schedulerwire.Priority) int {
 }
 
 // replaceSubscribed replaces the proxy's relay-fed routing overlay from a
-// discovery:nodes snapshot: it projects every node advertising lm with a dialable
-// IP into the overlay (dropping the rest) and clears a user selection pinned to a
-// node that's no longer routable. The broker sends the full filtered set on every
-// change, so this is a wholesale replace, not a per-node apply — a departed node
-// is simply absent from the next snapshot.
+// discovery:nodes snapshot: it projects every node advertising Lemonade with a
+// dialable IP into the overlay (dropping the rest) and clears a user selection
+// pinned to a node that's no longer routable. The broker sends the full filtered
+// set on every change, so this is a wholesale replace, not a per-node apply — a
+// departed node is simply absent from the next snapshot.
 func (p *Proxy) replaceSubscribed(params json.RawMessage) {
 	var res noderec.GetNodesResult
 	if err := json.Unmarshal(params, &res); err != nil {
@@ -1869,12 +1873,11 @@ func upstreamUnreachableID(nodeID string) string {
 }
 
 // subscribedToNode projects a relay DirectoryNode onto the proxy's routable Node
-// for the lm service, returning false when the node doesn't advertise lm or has
-// no dialable address. The engine port comes from the lm service key (the real
-// Lemonade port the broker's engine poller registered, not the proxy's listen
-// port).
+// for the Lemonade service, returning false when the node doesn't advertise
+// Lemonade or has no dialable address. The engine port comes from the Lemonade
+// service key (the promoted proxy port registered by the broker).
 func subscribedToNode(n noderec.DirectoryNode) (Node, bool) {
-	svc, ok := n.Services[noderec.ServiceLMStudio]
+	svc, ok := n.Services[discoveryService]
 	if !ok || n.IP == "" {
 		return Node{}, false
 	}
@@ -1898,7 +1901,7 @@ func subscribedToNode(n noderec.DirectoryNode) (Node, bool) {
 		ClusterUUID: n.ClusterUUID,
 		// Filter on this node's Lemonade models only, not the cross-engine union,
 		// so a model a dual-engine node serves solely via Ollama isn't accepted as
-		// an Lemonade owner here (falls back to the union for a peer that sends
+		// a Lemonade owner here (falls back to the union for a peer that sends
 		// no attribution — see DirectoryNode.EngineModels).
 		Models: append([]string(nil), n.EngineModels("lemonade")...),
 	}, true

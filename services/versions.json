@@ -5,7 +5,7 @@
   "components": {
     "ollama-proxy": "0.26.3",
     "lmstudio-proxy": "0.16.3",
-    "lemonade-proxy": "0.1.1",
+    "lemonade-proxy": "0.1.2",
     "nvpair-node-info": "0.14.1",
     "nvpair-node-scanner": "0.20.3",
     "nvpair-manual-nodes": "0.11.1",

@@ -5,10 +5,10 @@ package main
 
 // Discovery is the proxy's routing-target set. The proxy runs no mDNS of its
 // own: routing targets are pushed down from the broker's discovery relay
-// (discovery:nodes snapshots for the lm service) into the subscribed overlay,
-// merged with user-added manual nodes. The proxy is itself advertised — as an lm
-// service — by the node-scanner daemon's single _nvpair-node record, keyed off
-// the engine port the broker's poller registers.
+// (discovery:nodes snapshots for the Lemonade service) into the subscribed overlay,
+// merged with user-added manual nodes. The proxy is itself advertised — as a
+// Lemonade service — by the node-scanner daemon's single _nvpair-node record,
+// keyed off the engine port the broker's poller registers.
 //
 // The routable Node projection (IP / withPrimaryIP) and the manual-node
 // overlay live here; request-path reachability (TCP-probe + failover) lives in
@@ -70,7 +70,7 @@ type Discovery struct {
 	mu          sync.RWMutex
 	manualNodes map[string]Node
 	// subscribedNodes are routing targets pushed down by the broker's discovery
-	// relay (discovery:nodes snapshots for the lm service), keyed by node ID (the
+	// relay (discovery:nodes snapshots for the Lemonade service), keyed by node ID (the
 	// directory instance name).
 	subscribedNodes map[string]Node
 }
