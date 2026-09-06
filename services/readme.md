@@ -35,7 +35,7 @@ see the [root README](../README.md#what-is-supported).
 
 ## Architecture
 
-This tree builds thirteen Go binaries. `nvpair-ui-broker` is the parent service and supervises the eleven workers, all spawned at startup — only the scanner is required, and a missing binary for any other leaves the broker running without that capability. `nvpair-tui` is the thirteenth: a terminal client that launches and supervises its own broker rather than being supervised. Processes communicate via newline-delimited JSON-RPC 2.0 over stdio or, optionally, a Unix socket / Windows named pipe.
+This tree builds thirteen Go binaries. `nvpair-ui-broker` is the parent service and supervises the eleven workers, all spawned at startup — only the scanner is required, and a missing binary for any other leaves the broker running without that capability. `nvpair-tui` is the thirteenth: a terminal client that launches and supervises its own broker rather than being supervised. Processes communicate via newline-delimited JSON-RPC 2.0 over stdio or, optionally, a Unix socket / Windows named pipe. On Linux, the broker can instead run without a controller under systemd; see [Running PAIR as a systemd user service](../docs/systemd-service.mdx).
 
 | Binary | Role |
 | --- | --- |

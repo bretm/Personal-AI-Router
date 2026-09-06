@@ -22,6 +22,7 @@ import (
 
 func main() {
 	ipcPath := flag.String("ipc", "", "IPC endpoint: Unix domain socket path or Windows named pipe (default: stdin/stdout)")
+	headless := flag.Bool("headless", false, "run without a JSON-RPC controller until interrupted")
 	scannerPath := flag.String("scanner-path", "", "path to nvpair-node-scanner binary (default: ./nvpair-node-scanner in the current working directory)")
 	nodeInfoPath := flag.String("node-info-path", "", "path to nvpair-node-info binary (default: ./nvpair-node-info in the current working directory)")
 	proxyPath := flag.String("proxy-path", "", "path to ollama-proxy binary (default: ./ollama-proxy in the current working directory)")
@@ -63,6 +64,9 @@ func main() {
 		slog.Error(fmt.Sprintf(format, a...))
 		sink.Close()
 		os.Exit(1)
+	}
+	if *headless && *ipcPath != "" {
+		fatalf("--headless and --ipc cannot be used together")
 	}
 
 	// The inter-node workers do cluster-scoped mTLS off the cert + pins
@@ -220,14 +224,18 @@ func main() {
 	}
 
 	var transport io.ReadWriteCloser
-	if *ipcPath != "" {
+	switch {
+	case *headless:
+		transport = newHeadlessTransport()
+		log.Print("using headless transport")
+	case *ipcPath != "":
 		conn, err := dialIPC(*ipcPath)
 		if err != nil {
 			fatalf("failed to connect to IPC endpoint %q: %v", *ipcPath, err)
 		}
 		transport = conn
 		log.Printf("using IPC transport: %s", *ipcPath)
-	} else {
+	default:
 		transport = newStdioTransport()
 		log.Print("using stdio transport")
 	}

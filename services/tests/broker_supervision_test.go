@@ -16,9 +16,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -321,6 +323,74 @@ func TestBrokerShutsDownOnSignal(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		cmd.Process.Kill()
 		t.Fatal("broker did not exit within 10s of SIGINT (read loop blocked on stdin?)")
+	}
+}
+
+func TestBrokerRejectsHeadlessWithIPCBeforeResolvingWorkers(t *testing.T) {
+	cmd := exec.Command(brokerBin,
+		"--headless",
+		"--ipc", "unused",
+		"--scanner-path", filepath.Join(t.TempDir(), "missing-scanner"),
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("broker accepted --headless with --ipc")
+	}
+	if !regexp.MustCompile(`--headless and --ipc cannot be used together`).Match(output) {
+		t.Fatalf("broker reported the wrong startup error: %s", output)
+	}
+}
+
+// TestBrokerHeadlessSurvivesClosedStdin verifies the service-manager contract:
+// --headless must keep the broker and its worker tree alive when no controller
+// owns stdin, then perform the normal signal-driven shutdown.
+func TestBrokerHeadlessSurvivesClosedStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signalling a specific process is not supported on Windows")
+	}
+	configDir := t.TempDir()
+	cmd := exec.Command(brokerBin,
+		"--headless",
+		"--scanner-path", scannerBin,
+		"--cluster-dir", t.TempDir(),
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+configDir,
+		"XDG_CONFIG_HOME="+configDir,
+		"APPDATA="+configDir,
+		"LOCALAPPDATA="+configDir,
+	)
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatalf("broker stderr pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start headless broker: %v", err)
+	}
+	lines := startLineReader(stderrPipe)
+	waitForStderr(t, lines, regexp.MustCompile(`scanner started`), 10*time.Second)
+
+	// With ordinary stdio, the broker observes EOF and exits. Headless mode owns
+	// an internal transport, so closed stdin must not end the service lifetime.
+	time.Sleep(100 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("headless broker exited after stdin EOF: %v", err)
+	}
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("signal headless broker: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("headless broker shutdown: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatal("headless broker did not exit within 10s of SIGINT")
 	}
 }
 

@@ -1,0 +1,88 @@
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+# Running PAIR as a systemd User Service
+
+PAIR can run as a long-lived Linux node without Electron or a terminal. The
+systemd user service starts `nvpair-ui-broker --headless`; the broker continues
+to own and supervise the worker tree exactly as it does under the desktop and
+terminal interfaces.
+
+The service runs as your user, not as root. That preserves the same settings,
+cluster identity, trust pins, and engine state under your per-user PAIR data
+directory.
+
+> Run exactly one PAIR controller on a machine. Stop the desktop application and
+> terminal interface before starting the service. They each start their own
+> broker and worker tree, and concurrent trees compete for the same ports and
+> state.
+
+## Build and Install the Unit
+
+Build a complete service bundle first:
+
+```bash
+make build-binaries
+```
+
+Install a user unit pointing at that bundle. The installer validates the
+required binaries, renders the unit, verifies it with `systemd-analyze` when
+available, and reloads the user manager. It deliberately does not start PAIR.
+
+```bash
+./scripts/install-systemd-user-service.sh \
+  --bin-dir "$PWD/desktop/cli-bin"
+```
+
+For a standalone services build, pass `$PWD/services/build/bin` instead. Use
+`--dry-run` to inspect the rendered unit without changing the user manager.
+
+## Start at Boot
+
+A user manager normally stops after its final login session. Enable lingering
+once if this machine should serve the cluster before you log in:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Quit the PAIR desktop application or terminal interface, then enable and start
+the service:
+
+```bash
+systemctl --user enable --now nvpair.service
+```
+
+## Operate the Service
+
+```bash
+systemctl --user status nvpair.service
+journalctl --user -u nvpair.service -f
+systemctl --user restart nvpair.service
+systemctl --user stop nvpair.service
+```
+
+`KillMode=mixed` sends the initial stop signal only to the broker. The broker
+then closes worker control streams and drains the inference stack in its normal
+order. systemd terminates anything left in the unit's control group only if the
+30-second service stop deadline expires.
+
+The headless broker has no controller interface. To change local settings with
+the desktop or terminal interface, stop the service first, make the change and
+exit that interface, then start the service again. Cluster data-plane traffic
+continues normally while the service is running.
+
+## Update a Source Build
+
+Rebuild the complete bundle and restart the service. A running process keeps its
+current executable open, so the restart is the point at which the new bundle
+takes effect.
+
+```bash
+make build-binaries
+systemctl --user restart nvpair.service
+```
+
+If the binary directory moves, rerun the installer with the new absolute path.

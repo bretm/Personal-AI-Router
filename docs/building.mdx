@@ -207,6 +207,14 @@ For the methods, notifications, and worker ownership, refer to the
 [broker reference](../services/nvpair-ui-broker/README.md). That document, not
 this one, is the source of truth for API usage.
 
+### Run Continuously with systemd
+
+On Linux, `nvpair-ui-broker --headless` keeps the worker tree running without a
+desktop or terminal controller and shuts it down cleanly on `SIGTERM`. Use the
+provided systemd user-unit installer rather than keeping a terminal session
+open. See [Running PAIR as a systemd user service](systemd-service.mdx) for the
+installation, boot, update, and operating procedure.
+
 ### Write Your Own Client
 
 The broker's JSON-RPC API is the same contract the desktop application and the
