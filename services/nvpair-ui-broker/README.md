@@ -59,13 +59,21 @@ Every worker runs under a supervisor that auto-restarts it on an unexpected exit
 
 ## Communication
 
-Bidirectional newline-delimited JSON-RPC 2.0 — same conventions as every other NVPAIR subprocess. By default the broker reads stdin and writes stdout; with `--ipc <path>` it dials a Unix domain socket or Windows named pipe instead. The parent UI process owns the endpoint in both cases: it either spawns the broker with piped stdio, or sets up the pipe / socket beforehand and points the broker at it via `--ipc`. The broker always talks to exactly one peer.
+In controller modes, the broker uses bidirectional newline-delimited JSON-RPC
+2.0 — the same conventions as every other NVPAIR subprocess. By default it
+reads stdin and writes stdout; with `--ipc <path>` it dials a Unix domain socket
+or Windows named pipe instead. The parent UI process owns the endpoint in both
+cases: it either spawns the broker with piped stdio, or sets up the pipe or
+socket beforehand and points the broker at it via `--ipc`. The broker talks to
+exactly one peer in either controller mode. With `--headless`, it has no
+controller peer and stays alive until it receives a shutdown signal.
 
 ## CLI Flags
 
 | Flag | Default | Description |
 |---|---|---|
 | `--ipc <path>` | _(stdio)_ | IPC endpoint to dial: Unix socket path or Windows named pipe (e.g. `\\.\pipe\nvpair-ui-broker`) |
+| `--headless` | `false` | Run without a JSON-RPC controller until interrupted. Intended for service managers such as systemd; cannot be combined with `--ipc` |
 | `--scanner-path <path>` | `./nvpair-node-scanner[.exe]` in the CWD | Explicit path to the `nvpair-node-scanner` binary the broker should spawn |
 | `--node-info-path <path>` | `./nvpair-node-info[.exe]` in the CWD | Explicit path to the `nvpair-node-info` binary the broker should spawn. When omitted and no default sibling exists, the broker runs without the local inventory server (non-fatal); when set to an invalid path, the broker exits with an error |
 | `--proxy-path <path>` | `./ollama-proxy[.exe]` in the CWD | Explicit path to the `ollama-proxy` binary the broker spawns for the local Ollama reverse proxy. Same optional semantics as `--node-info-path`: an absent default sibling means no local proxy (non-fatal); an invalid explicit path exits with an error |
@@ -82,6 +90,12 @@ Bidirectional newline-delimited JSON-RPC 2.0 — same conventions as every other
 | `--version` | | Print version and exit |
 
 Logs go to **stderr** (shared `applog` format, same as every other NVPAIR binary). stdout is reserved for JSON-RPC frames in stdio mode, so logging there would corrupt the protocol. Every spawned worker's stderr is forwarded to the broker's stderr unmodified, so `[nvpair-node-scanner]`, `[nvpair-node-info]`, `[ollama-proxy]`, `[nvpair-workload-manager]`, and `[nvpair-cluster-manager]` lines interleave with the broker's `[nvpair-ui-broker]` lines on a single stream.
+
+In headless mode, controller reads remain open until shutdown and controller
+notifications are discarded. Worker supervision, discovery, engine management,
+routing, cluster traffic, logs, and signal-driven teardown are unchanged. Run
+only one broker tree per machine; stop the systemd service before launching the
+desktop application or terminal interface.
 
 ## Worker subprocesses
 

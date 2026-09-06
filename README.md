@@ -235,7 +235,9 @@ Each entry assumes the ones before it.
    anything, or if you want to know why PAIR behaves the way it does.
 7. **[Building and running](docs/building.mdx)** — prerequisites, building from
    source, running the services without the desktop application, and writing
-   your own client against the JSON-RPC API.
+   your own client against the JSON-RPC API. Linux nodes that should run without
+   a login session can continue with
+   **[Running PAIR as a systemd user service](docs/systemd-service.mdx)**.
 8. **[Developer guide](docs/developing.mdx)** — read this before contributing:
    where the code lives, how a change travels through the layers, and the
    conventions the project enforces.

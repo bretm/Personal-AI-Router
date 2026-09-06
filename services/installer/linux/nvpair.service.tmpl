@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Managed by scripts/install-systemd-user-service.sh.
+
+[Unit]
+Description=NVIDIA Personal AI Router
+Documentation=https://github.com/NVIDIA/Personal-AI-Router
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@NVPAIR_BIN_DIR@
+ExecStart=@NVPAIR_BIN_DIR@/nvpair-ui-broker --headless
+Restart=on-failure
+RestartSec=3s
+KillMode=mixed
+TimeoutStopSec=30s
+UMask=0077
+
+[Install]
+WantedBy=default.target

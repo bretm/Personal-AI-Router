@@ -94,6 +94,10 @@ with `screen -S pair`, detach with `Ctrl-a d`, and reattach with
 `screen -r pair`. Neither ships with PAIR. Install whichever your distribution
 provides.
 
+For an unattended Linux node that does not need an interactive controller, use
+the [systemd user service](systemd-service.mdx) instead. Stop that service before
+launching the TUI; both modes own a complete broker and worker tree.
+
 ## The Screen
 
 The top line shows `NVPAIR TUI` and the connection state on the right:
