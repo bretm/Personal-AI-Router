@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"nvpair-shared/engineauth"
 )
 
 // validManifest is a minimal well-formed manifest used as the base for
@@ -50,6 +52,27 @@ func TestValidateAcceptsValid(t *testing.T) {
 	m := validManifest()
 	if err := m.Validate(); err != nil {
 		t.Fatalf("valid manifest rejected: %v", err)
+	}
+}
+
+func TestValidateAcceptsEngineAuthSchemes(t *testing.T) {
+	for _, auth := range []engineauth.Config{
+		{Scheme: engineauth.SchemeBearer, Credential: "engine.example.api_key", Environment: "EXAMPLE_API_KEY"},
+		{Scheme: engineauth.SchemeHeader, Credential: "engine.example.api_key", Header: "X-API-Key"},
+	} {
+		m := validManifest()
+		m.Auth = auth
+		if err := m.Validate(); err != nil {
+			t.Fatalf("auth %+v rejected: %v", auth, err)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidEngineAuth(t *testing.T) {
+	m := validManifest()
+	m.Auth = engineauth.Config{Scheme: engineauth.SchemeHeader, Credential: "engine.example.api_key"}
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "credential header") {
+		t.Fatalf("invalid auth error = %v", err)
 	}
 }
 

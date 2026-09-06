@@ -205,7 +205,7 @@ func (e *Executor) reconcilePresence(ctx context.Context, engine string, st *eng
 		return presenceResult{Occupied: true}
 	}
 
-	identified := e.probe(ctx, ready, port)
+	identified := e.probe(ctx, ready, port, st.manifest)
 	if !identified {
 		if running && adopted {
 			st.mu.Lock()

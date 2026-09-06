@@ -135,8 +135,9 @@ Tab switching and `q` do not work until you do.
 | 6 | **Engines** | Local engines: installed, running, healthy, and port |
 | 7 | **Cluster** | This node's identity, cluster membership, and pairing |
 | 8 | **Manual** | Nodes you added by address, with reachability |
-| 9 | **Settings** | Node settings: force ports, cluster auto-sync, and cluster ID and name |
-| 10 | **Logs** | Service log output, with live log-level control |
+| 9 | **Auth** | Owner-managed PAIR client tokens and this node's engine credentials |
+| 10 | **Settings** | Node settings: force ports, cluster auto-sync, and cluster ID and name |
+| 11 | **Logs** | Service log output, with live log-level control |
 
 ## Pair This Machine with Another
 
@@ -229,9 +230,21 @@ On **Logs** (10), scroll with `j` / `k` and the page keys. Set the log level for
 the whole service fleet with `d` (debug), `i` (info), `w` (warn), or `e` (error).
 This is the first place to look when something has not started.
 
+## Manage Authentication
+
+On **Auth** (9), the founding node can initialize cluster authentication (`b`),
+create a client token (`n`), and revoke the selected client (`r`). A newly
+created token is displayed once; save it outside PAIR, then press `x` to dismiss
+it. Other paired nodes show validator status but cannot list or change clients.
+
+Each node manages its own engine credential independently. Press `e` to enter a
+reference such as `engine.example.api_key`, `s` to set its write-only value, or
+`c` to clear it. PAIR shows only whether the value is configured; it never
+returns the stored value.
+
 ## Change Settings
 
-On **Settings** (9), move with `j` / `k` and press `enter`. Booleans toggle
+On **Settings** (10), move with `j` / `k` and press `enter`. Booleans toggle
 immediately. Text fields open for editing, with `enter` to save and `esc` to
 cancel.
 

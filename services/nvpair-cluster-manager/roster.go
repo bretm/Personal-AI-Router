@@ -13,6 +13,8 @@ import (
 	"net"
 	"strconv"
 	"time"
+
+	"nvpair-shared/meshauth"
 )
 
 // RosterEntry is one member's identity + cert + the endorsements that admit it,
@@ -32,10 +34,11 @@ type RosterEntry struct {
 // Roster is a node's full view of the cluster exchanged on the reconcile
 // endpoint: every member it trusts (plus itself) and the removals it knows of.
 type Roster struct {
-	ClusterID     string         `json:"clusterId"`
-	Members       []RosterEntry  `json:"members"`
-	Tombstones    []Tombstone    `json:"tombstones,omitempty"` // legacy compatibility
-	RemovalProofs []RemovalProof `json:"removalProofs,omitempty"`
+	ClusterID     string             `json:"clusterId"`
+	Members       []RosterEntry      `json:"members"`
+	Tombstones    []Tombstone        `json:"tombstones,omitempty"` // legacy compatibility
+	RemovalProofs []RemovalProof     `json:"removalProofs,omitempty"`
+	MeshAuth      *meshauth.Document `json:"meshAuth,omitempty"`
 }
 
 // selfPub returns this node's own Ed25519 public key.
@@ -61,6 +64,9 @@ func (m *Manager) buildLocalRoster() *Roster {
 		ClusterID:     cid,
 		Tombstones:    m.snapshotTombstones(),
 		RemovalProofs: m.snapshotRemovalProofs(),
+	}
+	if d, err := m.meshAuth.Export(); err == nil && d.ClusterID == cid {
+		r.MeshAuth = &d
 	}
 
 	// Self entry — consumed by the already-trusting mTLS peer to refresh our
@@ -123,6 +129,13 @@ func (m *Manager) mergeRoster(remote *Roster, senderUUID string) bool {
 	}
 	if m.applyMembers(remote.Members, cid, senderUUID) {
 		changed = true
+	}
+	if remote.MeshAuth != nil && remote.MeshAuth.ClusterID == cid {
+		if imported, err := m.meshAuth.Import(*remote.MeshAuth); err != nil {
+			log.Printf("roster: reject mesh auth registry from %s: %v", senderUUID, err)
+		} else if imported {
+			changed = true
+		}
 	}
 	return changed
 }

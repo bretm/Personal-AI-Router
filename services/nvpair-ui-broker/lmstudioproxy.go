@@ -54,7 +54,8 @@ func (b *Broker) lmstudioProxyArgs() []string {
 	if port := int(b.lmstudioProxyStartupPort.Load()); port != 0 {
 		args = []string{"--port", fmt.Sprintf("%d", port), "--ignore-persisted-port"}
 	}
-	return append(args, b.clusterDirArgs()...)
+	args = append(args, b.clusterDirArgs()...)
+	return append(args, b.engineProxyAuthArgs("lmstudio")...)
 }
 
 // spawnLMStudioProxy is the lmstudio-proxy supervisor's spawn closure,

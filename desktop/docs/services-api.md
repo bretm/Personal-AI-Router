@@ -80,6 +80,11 @@
 | `cluster:invite-received` | notification (we consume) | ✅ yes |
 | `cluster:trust-changed` | notification (we consume) | ➖ ignored |
 | `nodes:changed` | notification (we consume) | ✅ yes |
+| `auth:bootstrap-owner` | request (we call) | ✅ yes |
+| `auth:create-client` | request (we call) | ✅ yes |
+| `auth:list-clients` | request (we call) | ✅ yes |
+| `auth:revoke-client` | request (we call) | ✅ yes |
+| `auth:status` | request (we call) | ✅ yes |
 | `cluster:cancel-invite` | request (we call) | ✅ yes |
 | `cluster:create` | request (we call) | ✅ yes |
 | `cluster:get-node-id` | request (we call) | ✅ yes |
@@ -107,6 +112,7 @@
 | `errors:clear` | notification (we consume) | ✅ yes |
 | `errors:report` | notification (we consume) | ✅ yes |
 | `engine:action` | request (we call) | ✅ yes |
+| `engine:auth-config` | request (we call) | ➖ ignored |
 | `engine:describe` | request (we call) | ⚠️ not called |
 | `engine:errors` | request (we call) | ⚠️ not called |
 | `engine:get-installed` | request (we call) | ✅ yes |
@@ -194,13 +200,16 @@
 | `connection/cluster-auto-sync` | notification (we consume) | ➖ ignored |
 | `connection/cluster-identity` | notification (we consume) | ✅ yes |
 | `ready` | notification (we consume) | ✅ yes |
+| `settings/clear-engine-credential` | request (we call) | ✅ yes |
 | `settings/get-cluster-auto-sync` | request (we call) | ⚠️ not called |
 | `settings/get-cluster-friendly-name` | request (we call) | ✅ yes |
 | `settings/get-cluster-id` | request (we call) | ✅ yes |
+| `settings/get-engine-credential-status` | request (we call) | ✅ yes |
 | `settings/get-force-ports` | request (we call) | ⚠️ not called |
 | `settings/set-cluster-auto-sync` | request (we call) | ⚠️ not called |
 | `settings/set-cluster-friendly-name` | request (we call) | ✅ yes |
 | `settings/set-cluster-id` | request (we call) | ✅ yes |
+| `settings/set-engine-credential` | request (we call) | ✅ yes |
 | `settings/set-force-ports` | request (we call) | ⚠️ not called |
 
 ## nvpair-tui

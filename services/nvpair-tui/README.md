@@ -35,6 +35,7 @@ Tabs:
 | **Engines** | Local inference engines: install (`i`), start (`s`), stop (`x`), restart (`r`), uninstall (`u`). |
 | **Cluster** | Pairing + membership: invite by address (`i`, shows the six-digit PIN — the first invite auto-founds a cluster of one), accept (`a`) / decline (`d`) an inbound invite, remove a member (`r`), leave (`L`). |
 | **Manual** | User-added nodes: add by address (`a`), remove (`r`). |
+| **Auth** | Owner-only PAIR client tokens and this node's write-only engine credentials, all through the local broker. |
 | **Settings** | The node-settings store (force-ports, cluster auto-sync, cluster id/name). |
 | **Logs** | The broker's (and workers') stderr, with live log-level control (`d`/`i`/`w`/`e`). |
 

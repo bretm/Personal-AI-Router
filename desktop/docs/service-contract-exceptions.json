@@ -3,6 +3,7 @@
     "ignoredMethods": {
         "schedule:priority": "Broker-internal. nvpair-job-scheduler emits a per-engine priority snapshot ({engine, nodes, ranks?} — ordered node ids plus each node's pending count) to nvpair-ui-broker, which forwards it to ollama-proxy and lmstudio-proxy via node/set-priority; each proxy then layers its own optimistic burst reservations on that baseline. PAIR consumes the routing result rather than this notification, and must not mirror the pending/reservation accounting.",
         "engine:restore-enabled": "Broker-internal startup restoration. nvpair-ui-broker emits engine:restore-enabled directly to its supervised engine-manager after the managed Ollama port gate and on manager respawn; it is not a renderer/UI notification.",
+        "engine:auth-config": "Broker-internal proxy startup query. nvpair-ui-broker reads the non-secret manifest authentication shape before spawning an engine proxy; a renderer neither needs nor may receive an engine credential.",
         "proxy:ready": "Consumed, not missing: the broker relays it and normalizeBrokerProxy (modular-supervisor.ts) strips the `proxy:` prefix, so the bridge handles the de-prefixed `ready` (sets proxyPort). The literal `proxy:ready` is intentionally absent from our TS — extractor limitation, not a gap.",
         "node/selection-changed": "Automatic routing has no selected-node UI, so PAIR deliberately does not consume proxy selection changes.",
         "proxy/request": "Per-request proxy telemetry is not rendered; workload lifecycle uses the broker workloads stream.",

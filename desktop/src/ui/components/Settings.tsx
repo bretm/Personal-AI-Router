@@ -4,6 +4,7 @@
 import { Flex, Stack } from '@nvidia/foundations-react-core'
 import ClusterSettings from '@/ui/components/ClusterSettings/ClusterSettings'
 import ServiceSettings from '@/ui/components/ServiceSettings/ServiceSettings'
+import AuthenticationSettings from '@/ui/components/AuthenticationSettings/AuthenticationSettings'
 import { InviteApprovalModal } from './InviteApprovalModal'
 import { ResponsiveNavLayout, type ResponsiveNavItem } from './ResponsiveNavLayout'
 import { isSettingsWindowTab } from '@/ui/types/settings-window'
@@ -11,6 +12,7 @@ import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
 
 const SETTINGS_NAV_ITEMS: ResponsiveNavItem[] = [
     { id: 'cluster', label: 'Cluster' },
+    { id: 'authentication', label: 'Authentication' },
     { id: 'service', label: 'Service' }
 ]
 
@@ -33,6 +35,7 @@ export default function Settings() {
                 <Stack className="grow overflow-hidden w-full">
                     <Stack className="grow overflow-y-auto w-full">
                         {activeTab === 'cluster' && <ClusterSettings />}
+                        {activeTab === 'authentication' && <AuthenticationSettings />}
                         {activeTab === 'service' && <ServiceSettings />}
                     </Stack>
                 </Stack>

@@ -13,6 +13,8 @@ import (
 	"strconv"
 
 	"nvpair-shared/cors"
+	"nvpair-shared/engineauth"
+	"nvpair-shared/meshauth"
 )
 
 const engineIdentityProbeHeader = "X-NVPAIR-Engine-Identity-Probe"
@@ -81,7 +83,35 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		writeIngressError(w, http.StatusConflict, "proxy-facade", "the compatibility facade is not an Ollama engine")
 		return
 	}
+	if !p.authorizeMeshClient(w, r) {
+		return
+	}
 	p.handleHTTP(w, r)
+}
+
+// authorizeMeshClient enforces the PAIR-facing credential only at the local
+// entry point. A paired proxy has already performed this check before its mTLS
+// terminal hop reaches this node. The bearer is removed in either case.
+func (p *Proxy) authorizeMeshClient(w http.ResponseWriter, r *http.Request) bool {
+	if p.meshAuth == nil || !p.meshAuth.Required() || r.Method == http.MethodOptions {
+		r.Header.Del("Authorization")
+		r.Header.Del("Proxy-Authorization")
+		r.Header.Del("Cookie")
+		return true
+	}
+	token, ok := meshauth.ParseBearer(r.Header.Get("Authorization"))
+	if !ok {
+		writeIngressError(w, http.StatusUnauthorized, "mesh-auth", "PAIR mesh authentication is required")
+		return false
+	}
+	if _, ok := p.meshAuth.ValidateBearer(token); !ok {
+		writeIngressError(w, http.StatusUnauthorized, "mesh-auth", "PAIR mesh authentication failed")
+		return false
+	}
+	r.Header.Del("Authorization")
+	r.Header.Del("Proxy-Authorization")
+	r.Header.Del("Cookie")
+	return true
 }
 
 // handleClusterIngress is the LAN mTLS personality: it authenticates the caller
@@ -118,6 +148,11 @@ func (p *Proxy) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 // cancellation (the request context is the proxy's root context, so a client
 // disconnect or shutdown tears down the upstream call and stops generation).
 func (p *Proxy) reverseProxyToLocal(w http.ResponseWriter, r *http.Request, target *url.URL) {
+	engineauth.StripInbound(r.Header, p.engineAuth)
+	if _, err := engineauth.Apply(r, p.engineAuth, p.credentialStore); err != nil {
+		writeIngressError(w, http.StatusUnauthorized, "engine-credential", "local engine credential is required but not configured")
+		return
+	}
 	p.newLocalReverseProxy(target).ServeHTTP(w, r)
 }
 

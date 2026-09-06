@@ -218,6 +218,19 @@ func (m *Manager) handleMessage(ctx context.Context, msg *Message) {
 		}
 		m.codec.Respond(msg.ID, mf)
 
+	case "engine:auth-config":
+		var p engineParam
+		if !m.parse(msg, &p) {
+			return
+		}
+		mf, ok := m.exec.reg.Get(p.Engine)
+		if !ok {
+			m.codec.RespondError(msg.ID, -32602, fmt.Sprintf("unknown engine %q", p.Engine))
+			return
+		}
+		// Public manifest metadata only; a credential value is never exposed.
+		m.codec.Respond(msg.ID, mf.Auth.Normalized())
+
 	case "engine:status":
 		var p engineParam
 		if !m.parse(msg, &p) {

@@ -25,7 +25,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,14 +100,16 @@ func (e *Executor) PullModelStream(ctx context.Context, engine, model string, pa
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := e.applyEngineAuth(req, st.manifest, act.HTTP.Auth); err != nil {
+		return nil, fmt.Errorf("pull %q: %w", model, err)
+	}
 	resp, err := e.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("pull %q: %w", model, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return nil, fmt.Errorf("pull %q: engine returned HTTP %d: %s", model, resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("pull %q: engine returned HTTP %d", model, resp.StatusCode)
 	}
 
 	// Coalesce redundant frames: a chatty engine streams many byte-progress

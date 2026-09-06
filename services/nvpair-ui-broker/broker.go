@@ -650,6 +650,7 @@ func (b *Broker) spawnProxy() (supervisedHandle, error) {
 	// ingress (and dial peers over mTLS) once this node is clustered; empty/
 	// absent certs leave it loopback-plaintext only.
 	args = append(args, b.clusterDirArgs()...)
+	args = append(args, b.engineProxyAuthArgs("ollama")...)
 	pp, err := startProxy("proxy", b.proxyPath, applog.LevelString(), b.relayDir,
 		func(method string, params json.RawMessage) {
 			b.forwardProxyNotificationForGeneration(generation, method, params)
@@ -669,6 +670,47 @@ func (b *Broker) spawnProxy() (supervisedHandle, error) {
 	}
 	slog.Info("proxy started", "path", b.proxyPath, "pid", pp.cmd.Process.Pid)
 	return pp, nil
+}
+
+// engineProxyAuthArgs obtains an engine's non-secret authentication shape from
+// engine-manager. Credentials remain in the local OS credential store; the
+// proxy receives only enough metadata to resolve and inject its own credential
+// at a final loopback hop.
+func (b *Broker) engineProxyAuthArgs(engine string) []string {
+	manager := b.getEngineMgr()
+	if manager == nil {
+		return nil
+	}
+	params, err := json.Marshal(map[string]string{"engine": engine})
+	if err != nil {
+		return nil
+	}
+	result, rpcErr, err := manager.Call(context.Background(), "engine:auth-config", params)
+	if err != nil || rpcErr != nil {
+		slog.Warn("unable to load engine authentication configuration for proxy", "engine", engine, "err", err, "rpc_error", rpcErr)
+		return nil
+	}
+	var auth struct {
+		Scheme      string `json:"scheme"`
+		Credential  string `json:"credential"`
+		Environment string `json:"environment"`
+		Header      string `json:"header"`
+	}
+	if err := json.Unmarshal(result, &auth); err != nil {
+		slog.Warn("invalid engine authentication configuration from engine-manager", "engine", engine, "err", err)
+		return nil
+	}
+	if auth.Scheme == "" || auth.Scheme == "none" {
+		return nil
+	}
+	args := []string{"--auth-scheme", auth.Scheme, "--auth-credential", auth.Credential}
+	if auth.Environment != "" {
+		args = append(args, "--auth-environment", auth.Environment)
+	}
+	if auth.Header != "" {
+		args = append(args, "--auth-header", auth.Header)
+	}
+	return args
 }
 
 func (b *Broker) spawnWorkloadManager() (supervisedHandle, error) {
@@ -2959,9 +3001,9 @@ func (b *Broker) handleMessage(msg *Message) {
 			b.relayToSettings(msg)
 			return
 		}
-		// cluster:* and nodes:* are the cluster-manager's namespaces; relay
+		// auth:*, cluster:*, and nodes:* are the cluster-manager's namespaces; relay
 		// them verbatim to nvpair-cluster-manager.
-		if strings.HasPrefix(msg.Method, "cluster:") || strings.HasPrefix(msg.Method, "nodes:") {
+		if strings.HasPrefix(msg.Method, "auth:") || strings.HasPrefix(msg.Method, "cluster:") || strings.HasPrefix(msg.Method, "nodes:") {
 			b.relayToClusterManager(msg)
 			return
 		}

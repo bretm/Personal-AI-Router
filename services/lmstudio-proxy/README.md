@@ -29,6 +29,10 @@ lmstudio-proxy [flags]
 | `--ignore-persisted-port` | `false` | Use `--port` even when a prior runtime port was saved |
 | `--ipc` | *(empty — use stdio)* | Path to a Unix domain socket or Windows named pipe for IPC |
 | `--cluster-dir` | *(empty)* | Cluster trust directory (`node.crt`/`node.key` plus trusted pins). Enables the LAN mTLS inference ingress while this node is a cluster member; empty means no ingress and no peer candidates. |
+| `--auth-scheme` | `none` | Engine auth scheme supplied by the broker: `none`, `bearer-token`, or `header`. |
+| `--auth-credential` | *(empty)* | Non-secret native credential reference, e.g. `engine.example.api_key`. |
+| `--auth-environment` | *(empty)* | Engine-native environment override name. |
+| `--auth-header` | *(empty)* | Header used when `--auth-scheme=header`. |
 | `--log-level` | *(`$NVPAIR_LOG_LEVEL`, else `info`)* | Initial log level: `debug`, `info`, `warn`, or `error`. Changeable at runtime with `log/set-level`. |
 | `--version` | | Print version and exit |
 
@@ -37,6 +41,14 @@ lmstudio-proxy [flags]
 The proxy listens on `--port` (default 1234) and forwards incoming HTTP requests to the currently active LM Studio node — except the model-list route `GET /v1/models`, which is queried across every candidate node concurrently and merged into one de-duplicated inventory. Point your OpenAI-compatible client at `http://localhost:1234` and the proxy handles routing.
 
 **Cluster ingress.** The listener carries two personalities, demultiplexed by each connection's first byte. Plaintext HTTP is accepted only from loopback; a LAN caller is refused. When `--cluster-dir` shows this node is a cluster member, the same listener also terminates cluster mTLS: a peer whose client certificate matches one of this node's pins is forwarded straight to the local engine reported by `node/set-local-backend`, and is never re-routed onward to another node. Membership and pins are re-derived per request, so joining or leaving a cluster needs no restart.
+
+**Credentials.** Once the cluster's mesh client registry exists, a loopback
+caller must present its per-client PAIR bearer token. The proxy validates it at
+that entry point and removes all caller auth before any peer hop. A paired mTLS
+request is already authorized by its pinned client certificate and is terminal:
+the proxy adds only this node's configured engine credential while talking to
+its loopback engine. Scheduler-selected local candidates and model-list calls
+use the same rule; remote and manual candidates never receive a local secret.
 
 **Persisted port.** A port chosen at runtime via the `set-port` request (see below) is saved as `lmstudio-proxy-port.json` in the per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on Windows, `~/.config/Nvidia Corporation/Personal AI Router` on Linux) and **restored on startup**, taking precedence over `--port`/the default. One value is exempt: a stored `1235` is discarded and `--port` is used instead, so that port cannot be restored even when it was chosen deliberately via `set-port`. Any other stored port is honoured. The broker uses `--ignore-persisted-port` while reserving the managed `1234` facade.
 

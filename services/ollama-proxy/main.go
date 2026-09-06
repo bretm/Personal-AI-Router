@@ -17,6 +17,8 @@ import (
 
 	"nvpair-shared/applog"
 	"nvpair-shared/clustertrust"
+	"nvpair-shared/engineauth"
+	"nvpair-shared/meshauth"
 )
 
 type aliasAddressFlags []string
@@ -34,6 +36,10 @@ func main() {
 	ignorePersistedPort := flag.Bool("ignore-persisted-port", false, "use --port even when a persisted port exists")
 	ipcPath := flag.String("ipc", "", "IPC endpoint: Unix domain socket path or Windows named pipe (default: stdin/stdout)")
 	clusterDir := flag.String("cluster-dir", "", "cluster trust directory (node.crt/key + trusted pins); enables the LAN mTLS inference ingress when this node is clustered")
+	authScheme := flag.String("auth-scheme", "none", "engine auth scheme: none, bearer-token, or header")
+	authCredential := flag.String("auth-credential", "", "public engine credential reference")
+	authEnvironment := flag.String("auth-environment", "", "engine credential environment override")
+	authHeader := flag.String("auth-header", "", "engine credential header for auth-scheme=header")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	resolveLevel := applog.RegisterFlag(nil, slog.LevelInfo)
 	flag.Parse()
@@ -99,6 +105,14 @@ func main() {
 	// presence: a left/removed node keeps its keypair by design, and would
 	// otherwise keep logging cluster_ingress with no cluster peers to serve.
 	proxy.mesh = clustertrust.Open(*clusterDir)
+	proxy.meshAuth = meshauth.New(*clusterDir)
+	proxy.engineAuth = engineauth.Config{Scheme: engineauth.Scheme(*authScheme), Credential: *authCredential, Environment: *authEnvironment, Header: *authHeader}
+	if err := proxy.engineAuth.Validate(); err != nil {
+		log.Fatalf("invalid engine auth configuration: %v", err)
+	}
+	if proxy.engineAuth.Normalized().Scheme != engineauth.SchemeNone {
+		proxy.credentialStore = engineauth.NativeStore()
+	}
 
 	go proxy.mesh.Watch(ctx, func(clustered bool) {
 		slog.Info("cluster inference ingress switched personality", "cluster_ingress", clustered)

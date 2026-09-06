@@ -57,6 +57,10 @@ func (m *Manager) pendingTeardown() (bool, error) {
 func (m *Manager) finishDurableTeardown() error {
 	m.teardownPending.Store(true)
 	var errs []error
+	cid, _ := m.currentAdmission()
+	if err := m.meshAuth.Clear(cid, m.credentialStore); err != nil {
+		errs = append(errs, fmt.Errorf("clear mesh authentication: %w", err))
+	}
 	if err := m.clearAdmission(); err != nil {
 		errs = append(errs, fmt.Errorf("clear admission: %w", err))
 	}

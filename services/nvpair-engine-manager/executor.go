@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nvpair-shared/engineauth"
 )
 
 var winEnvRe = regexp.MustCompile(`%([^%]+)%`)
@@ -100,7 +102,8 @@ type Executor struct {
 	// loadedPoke lets an explicit action (load/unload/pull/…) request an
 	// immediate out-of-cycle loaded-set check instead of waiting for the next
 	// tick. Buffered depth 1: a coalesced signal is enough.
-	loadedPoke chan struct{}
+	loadedPoke      chan struct{}
+	credentialStore engineauth.Store
 
 	reservedPort atomic.Int32
 	// StopAll is terminal for an Executor; the gate closes its start/snapshot race.
@@ -123,8 +126,17 @@ func NewExecutor(reg *Registry, reporter *Reporter, emit func(string, any), base
 		actionTimeout:      30 * time.Minute,
 		loadedPollInterval: defaultLoadedPollSeconds * time.Second,
 		loadedPoke:         make(chan struct{}, 1),
+		credentialStore:    engineauth.NativeStore(),
 		engines:            make(map[string]*engineState),
 	}
+}
+
+func (e *Executor) applyEngineAuth(req *http.Request, manifest *Manifest, override string) error {
+	if override == "none" {
+		return nil
+	}
+	_, err := engineauth.Apply(req, manifest.Auth, e.credentialStore)
+	return err
 }
 
 func (e *Executor) SetReservedPort(port int) error {

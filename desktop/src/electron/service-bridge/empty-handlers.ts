@@ -82,6 +82,117 @@ async function getClusterMembers(): Promise<ClusterNode[]> {
     }
 }
 
+function credentialSource(
+    value: JsonValue | undefined
+): 'missing' | 'environment' | 'secure_store' {
+    const source = stringValue(value)
+    if (source === 'environment' || source === 'secure_store') return source
+    return 'missing'
+}
+
+function credentialStatus(value: JsonValue | undefined): {
+    configured: boolean
+    source: 'missing' | 'environment' | 'secure_store'
+} {
+    const result = objectValue(value)
+    return {
+        configured: booleanValue(result?.configured),
+        source: credentialSource(result?.source)
+    }
+}
+
+async function handleMeshAuthStatus(): Promise<WsInvokeResponse<'auth:status'>> {
+    const result = objectValue(await callCluster('auth:status', {}))
+    return {
+        initialized: booleanValue(result?.initialized),
+        administrator: booleanValue(result?.administrator),
+        clusterId: stringValue(result?.clusterId),
+        revision: numberValue(result?.revision)
+    }
+}
+
+async function handleMeshAuthBootstrap(): Promise<{ clusterId: string; revision: number }> {
+    const result = objectValue(await callCluster('auth:bootstrap-owner', {}))
+    return { clusterId: stringValue(result?.clusterId), revision: numberValue(result?.revision) }
+}
+
+async function handleMeshAuthCreateClient(
+    payload?: WsInvokeRequest<'auth:create-client'>
+): Promise<WsInvokeResponse<'auth:create-client'>> {
+    if (!payload) return { id: '', label: '', token: '' }
+    const result = objectValue(await callCluster('auth:create-client', { label: payload.label }))
+    return {
+        id: stringValue(result?.id),
+        label: stringValue(result?.label),
+        token: stringValue(result?.token)
+    }
+}
+
+async function handleMeshAuthListClients(): Promise<WsInvokeResponse<'auth:list-clients'>> {
+    const result = objectValue(await callCluster('auth:list-clients', {}))
+    const rawClients = result?.clients
+    const clients: { id: string; label: string; revoked: boolean }[] = []
+    if (Array.isArray(rawClients)) {
+        for (const rawClient of rawClients) {
+            const client = objectValue(rawClient)
+            if (!client) continue
+            clients.push({
+                id: stringValue(client.id),
+                label: stringValue(client.label),
+                revoked: booleanValue(client.revoked)
+            })
+        }
+    }
+    return { revision: numberValue(result?.revision), clients }
+}
+
+async function handleMeshAuthRevokeClient(
+    payload?: WsInvokeRequest<'auth:revoke-client'>
+): Promise<WsInvokeResponse<'auth:revoke-client'>> {
+    if (!payload) return { ok: false }
+    const result = objectValue(await callCluster('auth:revoke-client', { id: payload.id }))
+    return { ok: booleanValue(result?.ok) }
+}
+
+async function handleEngineCredential(
+    method:
+        | 'settings/get-engine-credential-status'
+        | 'settings/set-engine-credential'
+        | 'settings/clear-engine-credential',
+    payload: { credential: string; value?: string }
+): Promise<{
+    configured: boolean
+    source: 'missing' | 'environment' | 'secure_store'
+}> {
+    const params: JsonObject = { credential: payload.credential }
+    if (payload.value !== undefined) params.value = payload.value
+    if (method === 'settings/get-engine-credential-status') {
+        return credentialStatus(
+            await getModularSupervisor().callProcess(
+                'broker',
+                'settings/get-engine-credential-status',
+                params
+            )
+        )
+    }
+    if (method === 'settings/set-engine-credential') {
+        return credentialStatus(
+            await getModularSupervisor().callProcess(
+                'broker',
+                'settings/set-engine-credential',
+                params
+            )
+        )
+    }
+    return credentialStatus(
+        await getModularSupervisor().callProcess(
+            'broker',
+            'settings/clear-engine-credential',
+            params
+        )
+    )
+}
+
 /** Map our `EngineType` onto the `nvpair-engine-manager` engine identifier. */
 export function engineManagerEngineName(engineType: EngineType): string {
     return engineType === 'lm-studio' ? 'lmstudio' : engineType
@@ -961,6 +1072,25 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'cluster:respond-to-invite': payload => handleClusterRespondToInvite(payload),
     'cluster:cancel-invite': payload => handleClusterCancelInvite(payload),
     'cluster:abandon-if-solo': () => handleClusterAbandonIfSolo(),
+
+    'auth:status': () => handleMeshAuthStatus(),
+    'auth:bootstrap-owner': () => handleMeshAuthBootstrap(),
+    'auth:create-client': payload => handleMeshAuthCreateClient(payload),
+    'auth:list-clients': () => handleMeshAuthListClients(),
+    'auth:revoke-client': payload => handleMeshAuthRevokeClient(payload),
+
+    'settings:get-engine-credential-status': payload =>
+        payload
+            ? handleEngineCredential('settings/get-engine-credential-status', payload)
+            : { configured: false, source: 'missing' },
+    'settings:set-engine-credential': payload =>
+        payload
+            ? handleEngineCredential('settings/set-engine-credential', payload)
+            : { configured: false, source: 'missing' },
+    'settings:clear-engine-credential': payload =>
+        payload
+            ? handleEngineCredential('settings/clear-engine-credential', payload)
+            : { configured: false, source: 'missing' },
 
     'engines:get-initial': () => getModularBridgeState().getEngineInitialState(),
     'engine:command': payload => handleEngineCommand(payload),

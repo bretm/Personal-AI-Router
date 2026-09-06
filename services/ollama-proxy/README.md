@@ -28,6 +28,10 @@ ollama-proxy [flags]
 | `--ignore-persisted-port` | `false` | Use `--port` even when `proxy-port.json` contains a saved port (used by broker-managed startup) |
 | `--ipc` | *(empty — use stdio)* | Path to a Unix domain socket or Windows named pipe for IPC |
 | `--cluster-dir` | *(empty)* | Cluster trust directory (`node.crt`/`node.key` plus trusted pins). Enables the LAN mTLS inference ingress while this node is a cluster member; empty means no ingress and no peer candidates. |
+| `--auth-scheme` | `none` | Engine auth scheme supplied by the broker: `none`, `bearer-token`, or `header`. |
+| `--auth-credential` | *(empty)* | Non-secret native credential reference, e.g. `engine.example.api_key`. |
+| `--auth-environment` | *(empty)* | Engine-native environment override name. |
+| `--auth-header` | *(empty)* | Header used when `--auth-scheme=header`. |
 | `--log-level` | *(`$NVPAIR_LOG_LEVEL`, else `info`)* | Initial log level: `debug`, `info`, `warn`, or `error`. Changeable at runtime with `log/set-level`. |
 | `--version` | | Print version and exit |
 
@@ -36,6 +40,14 @@ ollama-proxy [flags]
 The proxy listens on `--port` (default 11435) and forwards incoming HTTP requests to the currently active Ollama node — except the model-list routes `GET /api/tags` and `GET /v1/models`, which are queried across every candidate node concurrently and merged into one de-duplicated inventory. Point your Ollama client at `http://localhost:11435` and the proxy handles routing. When the broker supplies `--alias-address`, the proxy reserves that loopback-only endpoint before reporting ready and serves it through the same routing and workload-lifecycle handler. A `localhost` alias reserves `127.0.0.1` and `::1` atomically so client resolution cannot bypass the router. An occupied alias is non-fatal: its existing owner is untouched and the proxy reports an actionable warning while the primary listener stays available.
 
 **Cluster ingress.** The listener carries two personalities, demultiplexed by each connection's first byte. Plaintext HTTP is accepted only from loopback; a LAN caller is refused. When `--cluster-dir` shows this node is a cluster member, the same listener also terminates cluster mTLS: a peer whose client certificate matches one of this node's pins is forwarded straight to the local engine reported by `node/set-local-backend`, and is never re-routed onward to another node. Membership and pins are re-derived per request, so joining or leaving a cluster needs no restart.
+
+**Credentials.** Once the cluster's mesh client registry exists, a loopback
+caller must present its per-client PAIR bearer token. The proxy validates it at
+that entry point and removes all caller auth before any peer hop. A paired mTLS
+request is already authorized by its pinned client certificate and is terminal:
+the proxy adds only this node's configured engine credential while talking to
+its loopback engine. Scheduler-selected local candidates and model-list calls
+use the same rule; remote and manual candidates never receive a local secret.
 
 **Persisted port.** A port chosen at runtime via the `set-port` request (see below) is saved as `proxy-port.json` in the per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on Windows, `~/.config/Nvidia Corporation/Personal AI Router` on Linux) and **restored on startup**, taking precedence over `--port`/the default — so the proxy comes back up where it was last put. `--ignore-persisted-port` deliberately bypasses that restoration for a broker-coordinated start. Delete the file (or `set-port` back to the default) to revert.
 

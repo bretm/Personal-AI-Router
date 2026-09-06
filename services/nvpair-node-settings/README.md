@@ -155,6 +155,26 @@ non-empty is the verbatim id. Live cluster-membership changes
 come from `connection/cluster-identity` push notifications, not
 from polling this getter.
 
+### Engine credentials
+
+Engine credentials are deliberately outside `settings.json`. The three local
+JSON-RPC calls below use the current user's native OS credential store and
+never return a credential value:
+
+```json
+{"jsonrpc":"2.0","id":10,"method":"settings/get-engine-credential-status","params":{"credential":"engine.example.api_key"}}
+// -> {"configured":true,"source":"secure_store"}
+{"jsonrpc":"2.0","id":11,"method":"settings/set-engine-credential","params":{"credential":"engine.example.api_key","value":"..."}}
+// -> {"configured":true,"source":"secure_store"}
+{"jsonrpc":"2.0","id":12,"method":"settings/clear-engine-credential","params":{"credential":"engine.example.api_key"}}
+// -> {"configured":false,"source":"missing"}
+```
+
+Only references matching `engine.<name>.api_key` are accepted. A native
+credential store unavailable on the current desktop produces an error rather
+than falling back to a file. Environment overrides are evaluated by the engine
+and proxy, not reported by this status call.
+
 ### Removed methods
 
 The schema update removed four method pairs. They return `-32601`

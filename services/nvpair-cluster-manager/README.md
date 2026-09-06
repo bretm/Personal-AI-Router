@@ -316,6 +316,42 @@ mechanism (no CRL/OCSP). This keypair + `trusted/` store is the shared
 trust fabric other inter-node services (`nvpair-workload-manager`,
 `nvpair-errors` peer-sync) are intended to reuse. Full format in spec §7.4.
 
+## Mesh client authentication
+
+PAIR separates operating a paired node from administering the cluster. The
+cluster founder can initialize a signed client-token registry with
+`auth:bootstrap-owner`; its Ed25519 private signing key lives only in that
+node's native OS credential store. A joiner receives the public key and signed
+token-hash registry inside the authenticated pairing transcript, before its
+cluster admission becomes active. Later changes converge through the normal
+roster exchange. Paired nodes can validate clients but cannot create or revoke
+them. The current model has one owner and no delegated administrator or recovery
+path.
+
+The local-only administration calls are:
+
+```json
+{"jsonrpc":"2.0","id":19,"method":"auth:status"}
+{"jsonrpc":"2.0","id":20,"method":"auth:bootstrap-owner"}
+{"jsonrpc":"2.0","id":21,"method":"auth:create-client","params":{"label":"hermes-agent"}}
+{"jsonrpc":"2.0","id":22,"method":"auth:list-clients"}
+{"jsonrpc":"2.0","id":23,"method":"auth:revoke-client","params":{"id":"..."}}
+```
+
+`auth:status` returns `{initialized, administrator, clusterId?, revision?}`.
+Bootstrap is idempotent for the administrator and is permitted only while the
+founding node is the cluster's sole member. Creating a cluster does not access
+the native credential store; only an explicit `auth:bootstrap-owner` call
+creates the administrator key.
+
+`create-client` generates a `pair_` bearer token and returns it exactly once;
+it stores only a SHA-256 hash, and `list-clients` exposes only client id, label,
+and revocation state. Deliver the token out of band: it is never retrievable
+from PAIR after creation. A valid client sends it to its own loopback proxy as
+`Authorization: Bearer <token>`. That entry node removes
+the header before forwarding over mTLS; the destination node authenticates the
+peer by its pinned certificate and uses only its own local engine credential.
+
 ## Inter-node networking
 
 - One HTTP listener on TCP **`14321`** serves both the plain-HTTP **pairing

@@ -253,7 +253,7 @@ func (e *Executor) bringUpProcess(ctx context.Context, st *engineState, engine s
 	st.mu.Unlock()
 	e.watch(st, engine, proc)
 
-	if err := e.waitReady(ctx, rt.Ready, port); err != nil {
+	if err := e.waitReady(ctx, rt.Ready, port, st.manifest); err != nil {
 		// Mark stopping so the watcher doesn't report the deliberate kill
 		// as an unexpected "exited" event.
 		st.mu.Lock()
@@ -312,7 +312,7 @@ func (e *Executor) bringUpCommand(ctx context.Context, st *engineState, engine s
 		// official stop command before Start releases the lifecycle lock.
 		started = true
 	}
-	if err := e.waitReady(ctx, rt.Ready, port); err != nil {
+	if err := e.waitReady(ctx, rt.Ready, port, st.manifest); err != nil {
 		werr := fmt.Errorf("engine %q did not become ready: %w", engine, err)
 		e.reportStartFailedUnlessShuttingDown(ctx, engine, werr)
 		e.emitState(engine)
@@ -745,7 +745,7 @@ func (e *Executor) runHealth(ctx context.Context, st *engineState, engine string
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			ok := e.probe(ctx, h, port)
+			ok := e.probe(ctx, h, port, st.manifest)
 			st.mu.Lock()
 			// Bail if stopped or if a newer start superseded this loop —
 			// a stale loop must never write health for a later run.
@@ -771,7 +771,7 @@ func (e *Executor) runHealth(ctx context.Context, st *engineState, engine string
 	}
 }
 
-func (e *Executor) waitReady(ctx context.Context, p *Probe, port int) error {
+func (e *Executor) waitReady(ctx context.Context, p *Probe, port int, manifest *Manifest) error {
 	if p == nil {
 		return nil
 	}
@@ -781,7 +781,7 @@ func (e *Executor) waitReady(ctx context.Context, p *Probe, port int) error {
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if e.probe(ctx, p, port) {
+		if e.probe(ctx, p, port, manifest) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -795,7 +795,7 @@ func (e *Executor) waitReady(ctx context.Context, p *Probe, port int) error {
 	}
 }
 
-func (e *Executor) probe(ctx context.Context, p *Probe, port int) bool {
+func (e *Executor) probe(ctx context.Context, p *Probe, port int, manifest *Manifest) bool {
 	if p == nil {
 		return true
 	}
@@ -812,6 +812,11 @@ func (e *Executor) probe(ctx context.Context, p *Probe, port int) bool {
 			return false
 		}
 		req.Header.Set(engineIdentityProbeHeader, "1")
+		if manifest != nil {
+			if err := e.applyEngineAuth(req, manifest, p.Auth); err != nil {
+				return false
+			}
+		}
 		resp, err := e.client.Do(req)
 		if err != nil {
 			return false

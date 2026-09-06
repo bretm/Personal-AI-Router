@@ -177,6 +177,35 @@ Not every surface is gated, and the exceptions are deliberate:
 Pairing is plaintext because no trust exists yet at that point. The six-digit PIN
 is what authenticates the exchange that establishes the pinned certificates.
 
+### Client and engine authentication
+
+Mutual TLS answers *which paired node* is forwarding an inference request. It
+does not identify the local application that began it, and it is intentionally
+not reused as an engine API key. PAIR therefore has two separate, terminal
+credentials:
+
+| Boundary | Credential | Holder | Use |
+| --- | --- | --- | --- |
+| Local application → PAIR | Per-client PAIR bearer token | The application or agent | Required by its loopback proxy after the cluster owner initializes mesh authentication. |
+| PAIR → local engine | Engine-native API credential | Only the destination node's OS credential store or process environment | Injected only on that node's final loopback engine request. |
+
+The entry proxy validates the first credential, then strips `Authorization`,
+proxy authorization, cookies, and any configured engine-auth header before
+forwarding to a peer. The peer's mTLS ingress is terminal and injects its own
+engine credential only when it calls its own loopback engine. Thus a Hermes
+agent can use one PAIR token at its local node even when nodes in the same mesh
+have different engine credentials or no engine credential at all.
+
+The cluster founder is the sole mesh-auth administrator in the current design.
+Initialization is explicit and is allowed only while the founder is the sole
+member; creating a cluster does not open or write the native credential store.
+Once initialized, the signing key remains in the founder's local native
+credential store. A joiner receives only the public key and signed client-token
+hash registry inside the PIN-authenticated pairing transcript, before its
+admission becomes active; later revisions converge through the mTLS roster.
+Paired nodes can operate and route inference, but cannot mint or revoke clients.
+There is no delegated administrator or recovery path yet.
+
 Node telemetry is a considered trade-off, not an oversight. It is treated as the
 lowest-sensitivity inter-node surface and is read by consumers that are not
 cluster members, so it stays plaintext even on a clustered node. The practical

@@ -104,6 +104,40 @@ export interface IMetricsApi {
     onUpdate(callback: (metrics: NodeItemMetrics) => void): () => void
 }
 
+export interface IAuthApi {
+    status(): Promise<{
+        initialized: boolean
+        administrator: boolean
+        clusterId: string
+        revision: number
+    }>
+    bootstrapOwner(): Promise<{ clusterId: string; revision: number }>
+    createClient(label: string): Promise<{ id: string; label: string; token: string }>
+    listClients(): Promise<{
+        revision: number
+        clients: { id: string; label: string; revoked: boolean }[]
+    }>
+    revokeClient(id: string): Promise<{ ok: boolean }>
+}
+
+export interface ICredentialsApi {
+    status(credential: string): Promise<{
+        configured: boolean
+        source: 'missing' | 'environment' | 'secure_store'
+    }>
+    set(
+        credential: string,
+        value: string
+    ): Promise<{
+        configured: boolean
+        source: 'missing' | 'environment' | 'secure_store'
+    }>
+    clear(credential: string): Promise<{
+        configured: boolean
+        source: 'missing' | 'environment' | 'secure_store'
+    }>
+}
+
 // ---------------------------------------------------------------------------
 // Composite API
 // ---------------------------------------------------------------------------
@@ -122,6 +156,8 @@ export interface IPairApi {
     workloads: IWorkloadsApi
     errors: IErrorsApi
     metrics: IMetricsApi
+    auth: IAuthApi
+    credentials: ICredentialsApi
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +219,21 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
         },
         metrics: {
             onUpdate: cb => transport.subscribePush('metrics:update', cb)
+        },
+        auth: {
+            status: () => transport.invoke('auth:status'),
+            bootstrapOwner: () => transport.invoke('auth:bootstrap-owner'),
+            createClient: label => transport.invoke('auth:create-client', { label }),
+            listClients: () => transport.invoke('auth:list-clients'),
+            revokeClient: id => transport.invoke('auth:revoke-client', { id })
+        },
+        credentials: {
+            status: credential =>
+                transport.invoke('settings:get-engine-credential-status', { credential }),
+            set: (credential, value) =>
+                transport.invoke('settings:set-engine-credential', { credential, value }),
+            clear: credential =>
+                transport.invoke('settings:clear-engine-credential', { credential })
         }
     }
 }

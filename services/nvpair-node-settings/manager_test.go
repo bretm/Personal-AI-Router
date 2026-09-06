@@ -808,6 +808,64 @@ func TestNotificationIsIgnored(t *testing.T) {
 	}
 }
 
+type testEngineCredentialStore map[string]string
+
+func (s testEngineCredentialStore) Get(key string) (string, error) {
+	value, ok := s[key]
+	if !ok {
+		return "", fmt.Errorf("credential not found")
+	}
+	return value, nil
+}
+
+func (s testEngineCredentialStore) Set(key, value string) error {
+	s[key] = value
+	return nil
+}
+
+func (s testEngineCredentialStore) Remove(key string) error {
+	delete(s, key)
+	return nil
+}
+
+func TestEngineCredentialValueIsWriteOnly(t *testing.T) {
+	m, rw, _ := newTestManager(t)
+	store := testEngineCredentialStore{}
+	m.credentials = store
+	const secret = "credential-value-must-not-be-returned"
+
+	set := callAndDecode[map[string]any](t, m, rw, 1, "settings/set-engine-credential", map[string]string{
+		"credential": "engine.example.api_key",
+		"value":      secret,
+	})
+	if set["configured"] != true || set["source"] != "secure_store" {
+		t.Fatalf("set response = %+v", set)
+	}
+	if strings.Contains(fmt.Sprint(set), secret) {
+		t.Fatal("set response exposed the credential value")
+	}
+
+	status := callAndDecode[map[string]any](t, m, rw, 2, "settings/get-engine-credential-status", map[string]string{
+		"credential": "engine.example.api_key",
+	})
+	if status["configured"] != true || status["source"] != "secure_store" {
+		t.Fatalf("status response = %+v", status)
+	}
+	if strings.Contains(fmt.Sprint(status), secret) {
+		t.Fatal("status response exposed the credential value")
+	}
+
+	cleared := callAndDecode[map[string]any](t, m, rw, 3, "settings/clear-engine-credential", map[string]string{
+		"credential": "engine.example.api_key",
+	})
+	if cleared["configured"] != false || cleared["source"] != "missing" {
+		t.Fatalf("clear response = %+v", cleared)
+	}
+	if _, ok := store["engine.example.api_key"]; ok {
+		t.Fatal("credential remained in the store after clear")
+	}
+}
+
 func TestShutdownRequestCancelsRun(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"eapnoob"
+	"nvpair-shared/meshauth"
 )
 
 // pairingInfoVersion is the schema version of the PairingInfo object embedded in
@@ -33,15 +35,16 @@ var pinPattern = regexp.MustCompile(`^[0-9]{6}$`)
 // PeerInfo (joiner). It binds the node's cert and identity into the Hoob and the
 // Completion MACs (§7.2). Identical schema both directions.
 type PairingInfo struct {
-	V                   int    `json:"v"`
-	NodeUUID            string `json:"nodeUuid"`
-	NodeID              string `json:"nodeId"`
-	Name                string `json:"name"`
-	ClusterID           string `json:"clusterId"`
-	AdmissionEpoch      uint64 `json:"admissionEpoch,omitempty"`
-	ClusterFriendlyName string `json:"clusterFriendlyName"`
-	Addr                string `json:"addr,omitempty"`
-	Cert                string `json:"cert"`
+	V                   int                `json:"v"`
+	NodeUUID            string             `json:"nodeUuid"`
+	NodeID              string             `json:"nodeId"`
+	Name                string             `json:"name"`
+	ClusterID           string             `json:"clusterId"`
+	AdmissionEpoch      uint64             `json:"admissionEpoch,omitempty"`
+	ClusterFriendlyName string             `json:"clusterFriendlyName"`
+	Addr                string             `json:"addr,omitempty"`
+	Cert                string             `json:"cert"`
+	MeshAuth            *meshauth.Document `json:"meshAuth,omitempty"`
 }
 
 // localPairingInfo builds this node's PairingInfo. addr is the inviter's
@@ -55,7 +58,7 @@ func (m *Manager) localPairingInfo(addr string, admissionEpoch ...uint64) *Pairi
 	} else if admissionCID, current := m.currentAdmission(); admissionCID == cid {
 		epoch = current
 	}
-	return &PairingInfo{
+	info := &PairingInfo{
 		V:                   pairingInfoVersion,
 		NodeUUID:            m.identity.NodeUUID,
 		NodeID:              m.identity.NodeID,
@@ -66,6 +69,10 @@ func (m *Manager) localPairingInfo(addr string, admissionEpoch ...uint64) *Pairi
 		Addr:                addr,
 		Cert:                string(m.identity.CertPEM),
 	}
+	if d, err := m.meshAuth.Export(); err == nil && d.ClusterID == cid {
+		info.MeshAuth = &d
+	}
+	return info
 }
 
 // toMap renders the PairingInfo as the map[string]any the eap-noob config
@@ -104,6 +111,14 @@ func parsePairingInfo(raw []byte) (*PairingInfo, *x509.Certificate, error) {
 	if got := uuidFromCert(cert); got != pi.NodeUUID {
 		return nil, nil, fmt.Errorf("PairingInfo cert principal %q != nodeUuid %q", got, pi.NodeUUID)
 	}
+	if pi.MeshAuth != nil {
+		if pi.ClusterID == "" || pi.MeshAuth.ClusterID != pi.ClusterID {
+			return nil, nil, fmt.Errorf("PairingInfo mesh auth does not match clusterId")
+		}
+		if err := meshauth.Verify(*pi.MeshAuth); err != nil {
+			return nil, nil, fmt.Errorf("verify PairingInfo mesh auth: %w", err)
+		}
+	}
 	switch {
 	case pi.V >= pairingInfoVersion && pi.AdmissionEpoch == 0:
 		return nil, nil, fmt.Errorf("PairingInfo v%d missing admissionEpoch", pi.V)
@@ -113,6 +128,25 @@ func parsePairingInfo(raw []byte) (*PairingInfo, *x509.Certificate, error) {
 		pi.AdmissionEpoch = legacyAdmissionEpoch
 	}
 	return &pi, cert, nil
+}
+
+// importPairingMeshAuth persists the public registry authenticated by the
+// pairing transcript. It deliberately has no credential-store dependency: a
+// joiner validates clients but never receives the owner's private key.
+func (m *Manager) importPairingMeshAuth(pi *PairingInfo, clusterID string) (bool, error) {
+	if pi.MeshAuth == nil {
+		return false, nil
+	}
+	if clusterID == "" || pi.ClusterID != clusterID || pi.MeshAuth.ClusterID != clusterID {
+		return false, errors.New("pairing mesh auth does not match admitted cluster")
+	}
+	_, err := m.meshAuth.Import(*pi.MeshAuth)
+	if err != nil {
+		return false, err
+	}
+	// True means this provisional admission now owns the local document for
+	// rollback purposes, including an idempotent retry of the same document.
+	return true, nil
 }
 
 // generatePIN returns a fresh random six-digit PIN and its 16-byte Noob

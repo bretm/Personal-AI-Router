@@ -125,6 +125,9 @@ func (e *Executor) dispatchAction(ctx context.Context, st *engineState, engine, 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(engineIdentityProbeHeader, "1")
+	if err := e.applyEngineAuth(req, st.manifest, act.HTTP.Auth); err != nil {
+		return nil, fmt.Errorf("action %q: %w", action, err)
+	}
 	client := e.client
 	if engine == "ollama" && action == "run_model" && e.ollamaLoadClient != nil {
 		client = e.ollamaLoadClient
@@ -136,7 +139,7 @@ func (e *Executor) dispatchAction(ctx context.Context, st *engineState, engine, 
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("action %q: engine returned HTTP %d: %s", action, resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("action %q: engine returned HTTP %d", action, resp.StatusCode)
 	}
 	if len(data) == 0 {
 		return json.RawMessage("null"), nil

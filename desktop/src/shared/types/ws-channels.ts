@@ -89,6 +89,42 @@ export interface WsInvokeChannelMap {
     // that pairing failed and no peer joined (no-op otherwise).
     'cluster:abandon-if-solo': { request: void; response: null }
 
+    // Mesh client administration. These calls are local to the cluster owner;
+    // only create returns the generated bearer token, and only once.
+    'auth:status': {
+        request: void
+        response: {
+            initialized: boolean
+            administrator: boolean
+            clusterId: string
+            revision: number
+        }
+    }
+    'auth:bootstrap-owner': { request: void; response: { clusterId: string; revision: number } }
+    'auth:create-client': {
+        request: { label: string }
+        response: { id: string; label: string; token: string }
+    }
+    'auth:list-clients': {
+        request: void
+        response: { revision: number; clients: { id: string; label: string; revoked: boolean }[] }
+    }
+    'auth:revoke-client': { request: { id: string }; response: { ok: boolean } }
+
+    // Engine credentials remain write-only in the native OS credential store.
+    'settings:get-engine-credential-status': {
+        request: { credential: string }
+        response: { configured: boolean; source: 'missing' | 'environment' | 'secure_store' }
+    }
+    'settings:set-engine-credential': {
+        request: { credential: string; value: string }
+        response: { configured: boolean; source: 'missing' | 'environment' | 'secure_store' }
+    }
+    'settings:clear-engine-credential': {
+        request: { credential: string }
+        response: { configured: boolean; source: 'missing' | 'environment' | 'secure_store' }
+    }
+
     // Engines
     'engines:get-initial': { request: void; response: EngineInitialState }
     'engine:command': { request: EngineCommandPayload; response: null }

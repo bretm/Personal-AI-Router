@@ -182,11 +182,15 @@ func (m *Manager) handleRespondToInvite(msg *Message) {
 		}
 		admitted := *pi
 		admitted.ClusterID = inv.ClusterID
+		importedMeshAuth := false
 		end := m.endorsePeerForAdmission(admitted.NodeUUID,
 			certFingerprintFromDER(sess.peerCert.Raw), inv.ClusterID,
 			admitted.AdmissionEpoch, sess.localAdmissionEpoch)
 		rollback := func(cause error) error {
 			var rollbackErr error
+			if importedMeshAuth {
+				rollbackErr = errors.Join(rollbackErr, m.meshAuth.Discard(inv.ClusterID))
+			}
 			if err := m.trust.Remove(admitted.NodeUUID); err != nil {
 				m.trust.Forget(admitted.NodeUUID)
 				rollbackErr = errors.Join(rollbackErr, err)
@@ -205,6 +209,10 @@ func (m *Manager) handleRespondToInvite(msg *Message) {
 		}
 		if pinErr = m.pinPeer(&admitted, sess.peerCert, []Endorsement{end}); pinErr != nil {
 			pinErr = rollback(pinErr)
+			return
+		}
+		if importedMeshAuth, pinErr = m.importPairingMeshAuth(&admitted, inv.ClusterID); pinErr != nil {
+			pinErr = rollback(fmt.Errorf("import mesh authentication: %w", pinErr))
 			return
 		}
 		if pinErr = m.activateAdmission(inv.ClusterID, sess.localAdmissionEpoch); pinErr != nil {

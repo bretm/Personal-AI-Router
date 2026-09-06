@@ -8,6 +8,8 @@ Scope: dependencies linked into the thirteen shipped binaries (`ollama-proxy`, `
 
 | Component | Version | License |
 | --- | --- | --- |
+| `github.com/99designs/go-keychain` | v0.0.0-20191008050251-8e49817e8af4 | MIT |
+| `github.com/99designs/keyring` | v1.2.2 | MIT |
 | `github.com/Microsoft/go-winio` | v0.6.2 | MIT |
 | `github.com/atotto/clipboard` | v0.1.4 | BSD-3-Clause |
 | `github.com/aymanbagabas/go-osc52/v2` | v2.0.1 | MIT |
@@ -22,8 +24,12 @@ Scope: dependencies linked into the thirteen shipped binaries (`ollama-proxy`, `
 | `github.com/clipperhouse/displaywidth` | v0.9.0 | MIT |
 | `github.com/clipperhouse/stringish` | v0.1.1 | MIT |
 | `github.com/clipperhouse/uax29/v2` | v2.5.0 | MIT |
+| `github.com/danieljoos/wincred` | v1.1.2 | MIT |
+| `github.com/dvsekhvalnov/jose2go` | v1.5.0 | MIT |
 | `github.com/erikgeiser/coninput` | v0.0.0-20211004153227-1c3628e74d0f | MIT |
 | `github.com/go-ole/go-ole` | v1.2.6 | MIT |
+| `github.com/godbus/dbus` | v0.0.0-20190726142602-4481cbc300e2 | BSD-3-Clause |
+| `github.com/gsterjov/go-libsecret` | v0.0.0-20161001094733-a6f4afe4910c | MIT |
 | `github.com/grandcat/zeroconf` | v1.0.0 | MIT |
 | `github.com/jaypipes/ghw` | v0.24.0 | Apache-2.0 |
 | `github.com/jaypipes/pcidb` | v1.1.1 | Apache-2.0 |
@@ -32,6 +38,7 @@ Scope: dependencies linked into the thirteen shipped binaries (`ollama-proxy`, `
 | `github.com/mattn/go-localereader` | v0.0.1 | MIT |
 | `github.com/mattn/go-runewidth` | v0.0.19 | MIT |
 | `github.com/miekg/dns` | v1.1.55, v1.1.72 | BSD-3-Clause |
+| `github.com/mtibben/percent` | v0.2.1 | MIT |
 | `github.com/muesli/ansi` | v0.0.0-20230316100256-276c6243b2f6 | MIT |
 | `github.com/muesli/cancelreader` | v0.2.2 | MIT |
 | `github.com/muesli/termenv` | v0.16.0 | MIT |
@@ -40,6 +47,7 @@ Scope: dependencies linked into the thirteen shipped binaries (`ollama-proxy`, `
 | `github.com/yusufpapurcu/wmi` | v1.2.4 | MIT |
 | `golang.org/x/net` | v0.58.0 | BSD-3-Clause |
 | `golang.org/x/sys` | v0.47.0 | BSD-3-Clause |
+| `golang.org/x/term` | v0.45.0 | BSD-3-Clause |
 | `golang.org/x/text` | v0.3.8 | BSD-3-Clause |
 | `gopkg.in/yaml.v3` | v3.0.1 | MIT + Apache-2.0 |
 | `howett.net/plist` | v1.0.2-0.20250314012144-ee69052608d9 | BSD-2-Clause |
@@ -55,6 +63,64 @@ Scope: dependencies linked into the thirteen shipped binaries (`ollama-proxy`, `
 The MIT License (MIT)
 
 Copyright (c) 2015 Microsoft
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## github.com/99designs/go-keychain
+
+- Version: `v0.0.0-20191008050251-8e49817e8af4`
+- License: MIT
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Keybase
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## github.com/99designs/keyring
+
+- Version: `v1.2.2`
+- License: MIT
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 99designs
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -17,6 +17,8 @@ import (
 	"nvpair-shared/appdir"
 	"nvpair-shared/applog"
 	"nvpair-shared/clustertrust"
+	"nvpair-shared/engineauth"
+	"nvpair-shared/meshauth"
 	"nvpair-shared/noderec"
 	"nvpair-shared/reach"
 )
@@ -43,8 +45,10 @@ type Manager struct {
 	// authority for both inbound and outbound cluster-manager traffic. clients
 	// is the long-lived per-peer mTLS pool — a throwaway Transport per reconcile
 	// leaked a socket for the life of the process.
-	mesh    *clustertrust.Mesh
-	clients *clustertrust.PeerClientPool
+	mesh            *clustertrust.Mesh
+	clients         *clustertrust.PeerClientPool
+	meshAuth        *meshauth.Registry
+	credentialStore engineauth.Store
 
 	clusterMu            sync.RWMutex
 	clusterID            string
@@ -232,12 +236,14 @@ func NewManager(codec *Codec, configDir string, port int) (*Manager, error) {
 			Timeout:    pairingHTTPTimeout,
 			ResolvePin: trust.DER,
 		}),
-		members:       make(map[string]*ClusterNode),
-		invites:       make(map[string]*Invite),
-		tombstones:    make(map[string]Tombstone),
-		removalProofs: make(map[string]RemovalProof),
-		sessions:      make(map[string]*pairingSession),
-		peerAddrs:     reach.NewChooser(),
+		meshAuth:        meshauth.New(clusterDir),
+		credentialStore: engineauth.NativeStore(),
+		members:         make(map[string]*ClusterNode),
+		invites:         make(map[string]*Invite),
+		tombstones:      make(map[string]Tombstone),
+		removalProofs:   make(map[string]RemovalProof),
+		sessions:        make(map[string]*pairingSession),
+		peerAddrs:       reach.NewChooser(),
 	}
 	// Announce every pin-set mutation. This node's other workers cache answers
 	// derived from the trusted/ directory — above all "may work be routed to this
@@ -263,6 +269,14 @@ func NewManager(codec *Codec, configDir string, port int) (*Manager, error) {
 	}
 	if err := mgr.rollbackIncompleteAdmission(); err != nil {
 		return nil, fmt.Errorf("rollback incomplete admission: %w", err)
+	}
+	if cid, _ := mgr.currentAdmission(); cid == "" {
+		// A crash after importing an inviter's public AuthN registry but before
+		// activating admission leaves provisional pairing state. It carries no
+		// local secret and must not survive as authority for a future cluster.
+		if err := mgr.meshAuth.Discard(""); err != nil {
+			return nil, fmt.Errorf("discard unadmitted mesh authentication: %w", err)
+		}
 	}
 	if cid, epoch := mgr.currentAdmission(); cid != "" && epoch != 0 {
 		if err := mgr.migrateLegacyAdmissions(cid, epoch); err != nil {
@@ -409,6 +423,16 @@ func (m *Manager) handleMessage(msg *Message) {
 	}
 
 	switch msg.Method {
+	case "auth:status":
+		m.handleAuthStatus(msg)
+	case "auth:bootstrap-owner":
+		m.handleAuthBootstrap(msg)
+	case "auth:create-client":
+		m.handleAuthCreateClient(msg)
+	case "auth:list-clients":
+		m.handleAuthListClients(msg)
+	case "auth:revoke-client":
+		m.handleAuthRevokeClient(msg)
 	case "cluster:get-node-id":
 		m.handleGetNodeID(msg)
 	case "cluster:set-identity":

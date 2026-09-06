@@ -32,6 +32,7 @@ Requests (caller → service):
 |---|---|---|
 | `engine:get-installed` | — | `{ engines: [EngineStatus] }` |
 | `engine:describe` | `{ engine }` | the engine's manifest |
+| `engine:auth-config` | `{ engine }` | the manifest's non-secret auth shape: `{scheme, credential, environment?, header?}`; used only by the broker when it starts that engine's proxy |
 | `engine:status` | `{ engine }` | `EngineStatus` |
 | `engine:install` | `{ engine, start?, port?, bind? }` | `EngineStatus` (after install; also starts it if `start:true`) |
 | `engine:uninstall` | `{ engine }` | `EngineStatus` (after removal) |
@@ -52,6 +53,18 @@ Requests (caller → service):
 | `log/set-level` | `{ level }` | `{ level }` |
 
 `EngineStatus` = `{ engine, display_name, installed, running, healthy, port }`.
+
+### Engine credentials
+
+An engine manifest may declare `auth` with `scheme: "none"`,
+`"bearer-token"`, or `"header"`; authenticated forms name a credential such
+as `engine.example.api_key`, an optional environment override, and (for
+`header`) the header to set. The value is never part of a manifest, settings
+file, status response, or notification. Engine-manager resolves it from the
+engine-native environment override first and otherwise from the current user's
+native OS credential store for control-plane calls. The broker passes only this
+non-secret shape to the matching proxy, which resolves the same local value for
+the terminal loopback inference hop.
 
 Notifications (service → caller): `engine:ready{version}`,
 `engine:state-changed{EngineStatus}`,

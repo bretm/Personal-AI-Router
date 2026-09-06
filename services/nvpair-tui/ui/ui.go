@@ -50,6 +50,7 @@ func defaultViews(client *rpc.Client) []View {
 		newEnginesView(client),
 		newClusterView(client),
 		newManualView(client),
+		newAuthView(client),
 		newSettingsView(client),
 		newLogsView(client),
 	}

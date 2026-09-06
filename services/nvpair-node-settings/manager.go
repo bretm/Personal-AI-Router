@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"nvpair-shared/engineauth"
+
 	"nvpair-shared/applog"
 )
 
@@ -112,16 +114,18 @@ type Manager struct {
 	codec  *Codec
 	cancel context.CancelFunc
 
-	mu       sync.RWMutex
-	path     string
-	settings Settings
+	mu          sync.RWMutex
+	path        string
+	settings    Settings
+	credentials engineauth.Store
 }
 
 func NewManager(codec *Codec, path string) (*Manager, error) {
 	m := &Manager{
-		codec:    codec,
-		path:     path,
-		settings: defaultSettings(),
+		codec:       codec,
+		path:        path,
+		settings:    defaultSettings(),
+		credentials: engineauth.NativeStore(),
 	}
 	if err := m.load(); err != nil {
 		return nil, err
@@ -304,6 +308,17 @@ type stringValueParams struct {
 	Value *string `json:"value"`
 }
 
+// credentialParams is write-only. Credential values are never included in a
+// response, notification, log entry, or the ordinary settings file.
+type credentialParams struct {
+	Credential *string `json:"credential"`
+	Value      *string `json:"value,omitempty"`
+}
+
+func credentialConfig(ref string) engineauth.Config {
+	return engineauth.Config{Scheme: engineauth.SchemeBearer, Credential: ref}
+}
+
 func (m *Manager) handleMessage(msg *Message) {
 	if msg.Method == applog.SetLevelMethod {
 		resolved, err := applog.HandleSetLevelParams(msg.Params)
@@ -330,6 +345,51 @@ func (m *Manager) handleMessage(msg *Message) {
 	}
 
 	switch msg.Method {
+	case "settings/get-engine-credential-status":
+		var p credentialParams
+		if err := json.Unmarshal(msg.Params, &p); err != nil || p.Credential == nil || !engineauth.IsCredentialRef(*p.Credential) {
+			m.codec.RespondError(msg.ID, -32602, `invalid params: expected {"credential":"engine.<name>.api_key"}`)
+			return
+		}
+		_, status, err := engineauth.Resolve(credentialConfig(*p.Credential), m.credentials)
+		if err != nil {
+			m.codec.RespondError(msg.ID, -32603, "credential store unavailable")
+			return
+		}
+		m.codec.Respond(msg.ID, status)
+
+	case "settings/set-engine-credential":
+		var p credentialParams
+		if err := json.Unmarshal(msg.Params, &p); err != nil || p.Credential == nil || p.Value == nil || !engineauth.IsCredentialRef(*p.Credential) || *p.Value == "" {
+			m.codec.RespondError(msg.ID, -32602, `invalid params: expected non-empty {"credential":"engine.<name>.api_key","value":"..."}`)
+			return
+		}
+		if m.credentials == nil {
+			m.codec.RespondError(msg.ID, -32603, "native credential store unavailable")
+			return
+		}
+		if err := m.credentials.Set(*p.Credential, *p.Value); err != nil {
+			m.codec.RespondError(msg.ID, -32603, "failed to store engine credential")
+			return
+		}
+		m.codec.Respond(msg.ID, engineauth.Status{Configured: true, Source: engineauth.SourceStore})
+
+	case "settings/clear-engine-credential":
+		var p credentialParams
+		if err := json.Unmarshal(msg.Params, &p); err != nil || p.Credential == nil || !engineauth.IsCredentialRef(*p.Credential) {
+			m.codec.RespondError(msg.ID, -32602, `invalid params: expected {"credential":"engine.<name>.api_key"}`)
+			return
+		}
+		if m.credentials == nil {
+			m.codec.RespondError(msg.ID, -32603, "native credential store unavailable")
+			return
+		}
+		if err := m.credentials.Remove(*p.Credential); err != nil && !engineauth.IsNotFound(err) {
+			m.codec.RespondError(msg.ID, -32603, "failed to clear engine credential")
+			return
+		}
+		m.codec.Respond(msg.ID, engineauth.Status{Configured: false, Source: engineauth.SourceMissing})
+
 	case "settings/get-force-ports":
 		m.mu.RLock()
 		v := m.settings.ForcePorts

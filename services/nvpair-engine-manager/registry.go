@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"nvpair-shared/engineauth"
 )
 
 // ManifestSchemaVersion is the highest manifest_version this binary
@@ -55,6 +57,7 @@ type Manifest struct {
 	ManifestVersion int                 `json:"manifest_version"`
 	Platforms       map[string]Platform `json:"platforms"`
 	Actions         map[string]Action   `json:"actions,omitempty"`
+	Auth            engineauth.Config   `json:"auth,omitempty"`
 }
 
 // Platform is the per-`<goos>/<goarch>` block. Variance lives here
@@ -144,6 +147,9 @@ type Probe struct {
 	Status    int    `json:"status,omitempty"` // expected HTTP status (default 200)
 	TimeoutS  int    `json:"timeout_s,omitempty"`
 	IntervalS int    `json:"interval_s,omitempty"`
+	// Auth overrides the engine default for this probe. "none" is useful for a
+	// public liveness endpoint while model/control endpoints remain protected.
+	Auth string `json:"auth,omitempty"`
 }
 
 // StopSpec is how to terminate the engine. Default is a graceful
@@ -223,6 +229,7 @@ type ActionHTTP struct {
 	Method     string          `json:"method"`
 	Path       string          `json:"path"`
 	BodySchema json.RawMessage `json:"body_schema,omitempty"`
+	Auth       string          `json:"auth,omitempty"`
 }
 
 // ModeOrDefault returns the effective install mode ("user" when unset).
@@ -534,6 +541,9 @@ func (m *Manifest) Validate() error {
 	if m.ManifestVersion > ManifestSchemaVersion {
 		return fmt.Errorf("manifest_version %d is newer than supported %d", m.ManifestVersion, ManifestSchemaVersion)
 	}
+	if err := m.Auth.Validate(); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
 	if len(m.Platforms) == 0 {
 		return errors.New("at least one platforms entry is required")
 	}
@@ -619,6 +629,9 @@ func validateProbe(key, which string, p *Probe) error {
 	if strings.TrimSpace(p.HTTP) == "" && strings.TrimSpace(p.TCP) == "" {
 		return fmt.Errorf("platform %q: runtime.%s must set either http or tcp", key, which)
 	}
+	if p.Auth != "" && p.Auth != "none" {
+		return fmt.Errorf("platform %q: runtime.%s.auth must be \"none\" when set", key, which)
+	}
 	return nil
 }
 
@@ -646,6 +659,9 @@ func (a *Action) validate(name string) error {
 	}
 	if hasHTTP && (strings.TrimSpace(a.HTTP.Method) == "" || strings.TrimSpace(a.HTTP.Path) == "") {
 		return fmt.Errorf("action %q: http.method and http.path are required", name)
+	}
+	if hasHTTP && a.HTTP.Auth != "" && a.HTTP.Auth != "none" {
+		return fmt.Errorf("action %q: http.auth must be \"none\" when set", name)
 	}
 	if a.Result != nil && (strings.TrimSpace(a.Result.Array) == "" || strings.TrimSpace(a.Result.Field) == "") {
 		return fmt.Errorf("action %q: result.array and result.field are required when result is set", name)
