@@ -39,6 +39,28 @@ available, and reloads the user manager. It deliberately does not start PAIR.
 For a standalone services build, pass `$PWD/services/build/bin` instead. Use
 `--dry-run` to inspect the rendered unit without changing the user manager.
 
+### Install the Lemonade Credential
+
+The `amd-auth-lemonade` unit loads the normal Lemonade API key from a systemd
+encrypted credential. It does not use a plaintext environment file. Create the
+credential in the user manager's encrypted credential store before starting the
+service:
+
+```bash
+credential_store="${XDG_CONFIG_HOME:-$HOME/.config}/credstore.encrypted"
+install -d -m 0700 "$credential_store"
+read -r -s -p "Lemonade API key: " lemonade_api_key
+printf '\n'
+printf '%s' "$lemonade_api_key" | systemd-creds encrypt --user \
+  --name=lemonade-api-key - "$credential_store/lemonade-api-key"
+unset lemonade_api_key credential_store
+```
+
+The prompt is hidden, the plaintext is piped directly to `systemd-creds`, and
+only the encrypted credential is written to disk. PAIR receives it through its
+existing `LEMONADE_API_KEY` environment override when systemd starts the
+broker. The credential stays local to this node.
+
 ## Start at Boot
 
 A user manager normally stops after its final login session. Enable lingering

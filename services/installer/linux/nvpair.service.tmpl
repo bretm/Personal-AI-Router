@@ -11,7 +11,17 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=@NVPAIR_BIN_DIR@
-ExecStart=@NVPAIR_BIN_DIR@/nvpair-ui-broker --headless
+LoadCredentialEncrypted=lemonade-api-key
+ExecStart=/bin/sh -c '\
+credential_path="$${CREDENTIALS_DIRECTORY}/lemonade-api-key"; \
+if [ ! -s "$${credential_path}" ]; then \
+    echo "missing Lemonade API credential: install encrypted credential lemonade-api-key" >&2; \
+    exit 1; \
+fi; \
+LEMONADE_API_KEY="$$(cat "$${credential_path}")"; \
+export LEMONADE_API_KEY; \
+unset credential_path; \
+exec "@NVPAIR_BIN_DIR@/nvpair-ui-broker" --headless'
 Restart=on-failure
 RestartSec=3s
 KillMode=mixed
