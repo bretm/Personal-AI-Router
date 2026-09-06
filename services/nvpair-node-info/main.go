@@ -37,19 +37,24 @@ type GPUInfo struct {
 	// static GPUInfo against statsCollector.Snapshot() results. Its
 	// form is platform-specific: on Windows it's the PDH instance-name
 	// form of the adapter's LUID (e.g. "luid_0x00000000_0x000054f0_phys_0");
-	// on Linux it's an NVIDIA UUID or an AMD SMI GPU ID; on macOS it's the
+	// on Linux it's an NVIDIA UUID or an AMD PCI BDF / SMI GPU ID; on macOS it's the
 	// IORegistry entry ID. Empty on hosts with no dynamic GPU source.
 	// Unexported + json:"-" so it never travels over the wire.
 	statsKey string `json:"-"`
+
+	// pciAddress is retained on Linux so name-only ghw inventory can be joined
+	// to DRM sysfs counters when a vendor CLI is absent. It is strictly local
+	// implementation metadata and never travels over the wire.
+	pciAddress string `json:"-"`
 
 	// usesSystemMemoryUsage is set by Linux static detection when nvidia-smi
 	// cannot report GPU memory usage. Response assembly then maps the
 	// independently collected system-memory usage onto VramUsedBytes.
 	usesSystemMemoryUsage bool `json:"-"`
 
-	// usesGTTMemory is set for AMD GPUs whose AMD SMI VRAM type identifies
-	// system DDR as the graphics memory. Their GPU capacity and use come from
-	// the GTT pool rather than a discrete VRAM aperture.
+	// usesGTTMemory is set for AMD GPUs that KFD topology or AMD-SMI identifies
+	// as unified-memory adapters. Their capacity and use come from the GTT pool
+	// rather than the small firmware VRAM aperture.
 	usesGTTMemory bool `json:"-"`
 }
 

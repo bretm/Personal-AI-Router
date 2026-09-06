@@ -31,7 +31,7 @@ import (
 //   - GPU          : private NVIDIA and AMD adapters, joined back to static
 //     GPUInfo records by their opaque stats keys. NVIDIA UMA rows use the
 //     independently sampled system-memory usage; AMD APUs such as Strix Halo
-//     use the GTT pool reported by amd-smi.
+//     use the GTT pool reported by DRM sysfs (with AMD-SMI as a fallback).
 //
 // Like the Windows collector we keep one background goroutine ticking once a
 // second and publish the combined statsSnapshot via an atomic pointer swap;

@@ -8,6 +8,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -457,6 +459,211 @@ func TestParseAmdDynamic(t *testing.T) {
 	}
 }
 
+// TestAmdSmiFedoraStrixHaloMemory reproduces the Fedora AMD-SMI 26.2 output
+// from a Strix Halo APU. That release emits the enum sentinel as "GDDR7" even
+// though the GPU uses unified system memory, so PAIR must not expose the 1 GiB
+// VRAM aperture as the GPU's usable capacity.
+func TestAmdSmiFedoraStrixHaloMemory(t *testing.T) {
+	records := parseAmdStaticRecords(`{
+  "gpu_data": [{
+    "gpu": 0,
+    "asic": {"market_name": "AMD Radeon 8060S Graphics"},
+    "bus": {"bdf": "0000:c4:00.0"},
+    "vram": {
+      "type": "GDDR7",
+      "vendor": "UNKNOWN",
+      "size": {"value": 1024, "unit": "MB"},
+      "max_bandwidth": {"value": "N/A", "unit": "GB/s"}
+    }
+  }]
+}`)
+	reconcileAmdStaticWithDRM(records, []amdDRMGPU{{
+		bdf:               "0000:c4:00.0",
+		usesUnifiedMemory: true,
+		gttTotal:          98304 * 1024 * 1024,
+		gttTotalKnown:     true,
+	}})
+	context := amdContextFromStatic(records)
+	gpus := amdGPUInfos(records)
+	applyAmdMemoryInventory(gpus, parseAmdMemoryWithKeys(`{
+  "gpu_data": [{
+    "gpu": 0,
+    "mem_usage": {
+      "total_vram": {"value": 1024, "unit": "MB"},
+      "used_vram": {"value": 852, "unit": "MB"},
+      "total_gtt": {"value": 98304, "unit": "MB"},
+      "used_gtt": {"value": 590, "unit": "MB"}
+    }
+  }]
+}`, context.statsKeys))
+
+	if len(gpus) != 1 {
+		t.Fatalf("GPU count = %d, want 1", len(gpus))
+	}
+	if got, want := gpus[0].VramBytes, uint64(98304*1024*1024); got != want {
+		t.Fatalf("VRAM bytes = %d, want unified GTT capacity %d", got, want)
+	}
+	if !gpus[0].usesGTTMemory {
+		t.Fatal("Strix Halo GPU was not marked as unified-memory")
+	}
+}
+
+// TestFedoraStrixHaloTelemetryResponse exercises the producer seam that remote
+// clients consume: AMD-SMI contributes identity and memory, while DRM sysfs
+// replaces
+// its incorrect memory-kind metadata and unavailable utilization field.
+func TestFedoraStrixHaloTelemetryResponse(t *testing.T) {
+	runner := linuxGPUFixtureRunner(map[string]linuxGPUFixture{
+		linuxGPUCommandKey("amd-smi", "static", "--asic", "--bus", "--vram", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"asic":{"market_name":"AMD Radeon 8060S Graphics"},"bus":{"bdf":"0000:c4:00.0"},"vram":{"type":"GDDR7","vendor":"UNKNOWN","size":{"value":1024,"unit":"MB"}}}]}`,
+		},
+		linuxGPUCommandKey("amd-smi", "metric", "--mem-usage", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"mem_usage":{"total_vram":{"value":1024,"unit":"MB"},"used_vram":{"value":852,"unit":"MB"},"total_gtt":{"value":98304,"unit":"MB"},"used_gtt":{"value":590,"unit":"MB"}}}]}`,
+		},
+		linuxGPUCommandKey("amd-smi", "metric", "--usage", "--mem-usage", "--json"): {
+			output: `{"gpu_data":[{"gpu":0,"usage":"N/A","mem_usage":{"total_vram":{"value":1024,"unit":"MB"},"used_vram":{"value":852,"unit":"MB"},"total_gtt":{"value":98304,"unit":"MB"},"used_gtt":{"value":590,"unit":"MB"}}}]}`,
+		},
+	})
+	drm := []amdDRMGPU{{
+		bdf:                "0000:c4:00.0",
+		deviceID:           "1586",
+		renderMinor:        128,
+		usesUnifiedMemory:  true,
+		vramTotal:          1024 * 1024 * 1024,
+		vramTotalKnown:     true,
+		vramUsed:           852 * 1024 * 1024,
+		vramUsedKnown:      true,
+		gttTotal:           98304 * 1024 * 1024,
+		gttTotalKnown:      true,
+		gttUsed:            590 * 1024 * 1024,
+		gttUsedKnown:       true,
+		utilizationPercent: 37,
+		utilizationKnown:   true,
+	}}
+	collectors := newLinuxGPUCollectorsWithAMDDRM(
+		runner,
+		func() uint64 { return 128 * 1024 * 1024 * 1024 },
+		func() []GPUInfo { return nil },
+		func() []amdDRMGPU { return drm },
+	)
+
+	inventory := collectors.inventory()
+	stats, samples := collectors.sample()
+	response, _ := buildResponseDecode(t, inventory, nil, 0, statsSnapshot{GPU: stats})
+	if len(response.GPUs) != 1 {
+		t.Fatalf("GPU count = %d, want 1", len(response.GPUs))
+	}
+	want := GPUInfo{
+		Name:               "AMD Radeon 8060S Graphics",
+		VramBytes:          98304 * 1024 * 1024,
+		VramUsedBytes:      590 * 1024 * 1024,
+		UtilizationPercent: 37,
+	}
+	if !reflect.DeepEqual(response.GPUs[0], want) {
+		t.Fatalf("Strix Halo response = %+v, want %+v", response.GPUs[0], want)
+	}
+	if samples != 1 {
+		t.Fatalf("utilization samples = %d, want 1", samples)
+	}
+}
+
+func TestReadAMDDRMGPUs(t *testing.T) {
+	root := t.TempDir()
+	drmRoot := filepath.Join(root, "drm")
+	kfdRoot := filepath.Join(root, "kfd", "nodes")
+	deviceRoot := filepath.Join(drmRoot, "card1", "device")
+	for _, path := range []string{
+		filepath.Join(deviceRoot, "drm", "renderD128"),
+		filepath.Join(kfdRoot, "1"),
+	} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("create fixture directory: %v", err)
+		}
+	}
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "vendor"), "0x1002\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "uevent"), "PCI_ID=1002:1586\nPCI_SLOT_NAME=0000:c4:00.0\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "mem_info_vram_total"), "1073741824\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "mem_info_vram_used"), "893386752\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "mem_info_gtt_total"), "103079215104\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "mem_info_gtt_used"), "618659840\n")
+	writeLinuxGPUFixture(t, filepath.Join(deviceRoot, "gpu_busy_percent"), "37\n")
+	writeLinuxGPUFixture(t, filepath.Join(kfdRoot, "1", "properties"), "simd_count 80\ndrm_render_minor 128\nlocal_mem_size 0\n")
+
+	gpus := readAMDDRMGPUsAt(drmRoot, kfdRoot)
+	if len(gpus) != 1 {
+		t.Fatalf("GPU count = %d, want 1", len(gpus))
+	}
+	want := amdDRMGPU{
+		bdf:                "0000:c4:00.0",
+		deviceID:           "1586",
+		renderMinor:        128,
+		usesUnifiedMemory:  true,
+		vramTotal:          1073741824,
+		vramTotalKnown:     true,
+		vramUsed:           893386752,
+		vramUsedKnown:      true,
+		gttTotal:           103079215104,
+		gttTotalKnown:      true,
+		gttUsed:            618659840,
+		gttUsedKnown:       true,
+		utilizationPercent: 37,
+		utilizationKnown:   true,
+	}
+	if !reflect.DeepEqual(gpus[0], want) {
+		t.Fatalf("DRM GPU = %+v, want %+v", gpus[0], want)
+	}
+}
+
+func TestAMDDRMFallbackWithoutAmdSmi(t *testing.T) {
+	drm := []amdDRMGPU{{
+		bdf:                "0000:c4:00.0",
+		deviceID:           "1586",
+		usesUnifiedMemory:  true,
+		gttTotal:           98304 * 1024 * 1024,
+		gttTotalKnown:      true,
+		gttUsed:            590 * 1024 * 1024,
+		gttUsedKnown:       true,
+		utilizationPercent: 24,
+		utilizationKnown:   true,
+	}}
+	collectors := newLinuxGPUCollectorsWithAMDDRM(
+		func(context.Context, string, ...string) (string, error) {
+			return "", errors.New("vendor tool unavailable")
+		},
+		func() uint64 { return 0 },
+		func() []GPUInfo {
+			return []GPUInfo{{
+				Name:       "Strix Halo [Radeon Graphics / Radeon 8060S Graphics]",
+				pciAddress: "0000:c4:00.0",
+			}}
+		},
+		func() []amdDRMGPU { return drm },
+	)
+
+	inventory := collectors.inventory()
+	stats, samples := collectors.sample()
+	response, _ := buildResponseDecode(t, inventory, nil, 0, statsSnapshot{GPU: stats})
+	want := GPUInfo{
+		Name:               "Strix Halo [Radeon Graphics / Radeon 8060S Graphics]",
+		VramBytes:          98304 * 1024 * 1024,
+		VramUsedBytes:      590 * 1024 * 1024,
+		UtilizationPercent: 24,
+	}
+	if len(response.GPUs) != 1 || !reflect.DeepEqual(response.GPUs[0], want) {
+		t.Fatalf("DRM-only response = %+v, want [%+v]", response.GPUs, want)
+	}
+	if samples != 1 {
+		t.Fatalf("utilization samples = %d, want 1", samples)
+	}
+}
+
+func writeLinuxGPUFixture(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func TestLinuxGPUCollectorsMergeVendors(t *testing.T) {
 	runner := linuxGPUFixtureRunner(map[string]linuxGPUFixture{
 		linuxGPUCommandKey("nvidia-smi", "--query-gpu=uuid,name,memory.total", "--format=csv,noheader,nounits"): {
@@ -465,7 +672,7 @@ func TestLinuxGPUCollectorsMergeVendors(t *testing.T) {
 		linuxGPUCommandKey("nvidia-smi", "--query-gpu=uuid,utilization.gpu,memory.used", "--format=csv,noheader,nounits"): {
 			output: "GPU-nvidia, 31, 2048\n",
 		},
-		linuxGPUCommandKey("amd-smi", "static", "--asic", "--vram", "--json"): {
+		linuxGPUCommandKey("amd-smi", "static", "--asic", "--bus", "--vram", "--json"): {
 			output: `{"gpu_data":[{"gpu":0,"asic":{"market_name":"AMD Radeon AI PRO R9700"},"vram":{"type":"GDDR6","size":{"value":32704,"unit":"MB"}}}]}`,
 		},
 		linuxGPUCommandKey("amd-smi", "metric", "--mem-usage", "--json"): {

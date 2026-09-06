@@ -48,10 +48,14 @@ type linuxGPUCollectors struct {
 }
 
 func newLinuxGPUCollectors(run linuxGPUCommandRunner, memoryTotal func() uint64, fallback func() []GPUInfo) *linuxGPUCollectors {
+	return newLinuxGPUCollectorsWithAMDDRM(run, memoryTotal, fallback, func() []amdDRMGPU { return nil })
+}
+
+func newLinuxGPUCollectorsWithAMDDRM(run linuxGPUCommandRunner, memoryTotal func() uint64, fallback func() []GPUInfo, readDRM amdDRMReader) *linuxGPUCollectors {
 	return &linuxGPUCollectors{
 		adapters: []linuxGPUAdapter{
 			&nvidiaLinuxGPUAdapter{run: run},
-			&amdLinuxGPUAdapter{run: run},
+			&amdLinuxGPUAdapter{run: run, readDRM: readDRM, fallback: fallback},
 		},
 		memoryTotal: memoryTotal,
 		fallback:    fallback,
@@ -59,7 +63,7 @@ func newLinuxGPUCollectors(run linuxGPUCommandRunner, memoryTotal func() uint64,
 }
 
 func defaultLinuxGPUCollectors() *linuxGPUCollectors {
-	return newLinuxGPUCollectors(runLinuxGPUCommand, detectMemoryTotal, detectGPUsGHW)
+	return newLinuxGPUCollectorsWithAMDDRM(runLinuxGPUCommand, detectMemoryTotal, detectGPUsGHW, readAMDDRMGPUs)
 }
 
 // detectGPUs combines the inventories that NVIDIA and AMD tools can identify.
@@ -131,7 +135,7 @@ func detectGPUsGHW() []GPUInfo {
 		if card.DeviceInfo != nil && card.DeviceInfo.Product != nil {
 			name = card.DeviceInfo.Product.Name
 		}
-		gpus = append(gpus, GPUInfo{Name: name})
+		gpus = append(gpus, GPUInfo{Name: name, pciAddress: normalizePCIBDF(card.Address)})
 	}
 	return gpus
 }
@@ -240,42 +244,64 @@ func splitCSVRow(line string) []string {
 }
 
 type amdLinuxGPUAdapter struct {
-	run              linuxGPUCommandRunner
-	unavailable      atomic.Bool
-	memoryKindsMu    sync.RWMutex
-	memoryKindsKnown bool
-	gttMemory        map[string]bool
+	run         linuxGPUCommandRunner
+	readDRM     amdDRMReader
+	fallback    func() []GPUInfo
+	unavailable atomic.Bool
+	contextMu   sync.RWMutex
+	contextSet  bool
+	context     amdGPUContext
+}
+
+type amdGPUContext struct {
+	statsKeys map[int]string
+	gttMemory map[string]bool
 }
 
 func (a *amdLinuxGPUAdapter) inventory() []GPUInfo {
-	staticJSON, err := a.command("static", "--asic", "--vram", "--json")
-	if err != nil {
-		return nil
+	drm := a.drmGPUs()
+	staticJSON, err := a.command("static", "--asic", "--bus", "--vram", "--json")
+	records := parseAmdStaticRecords(staticJSON)
+	if err != nil || len(records) == 0 {
+		context := amdContextFromDRM(drm)
+		a.setGPUContext(context)
+		return amdDRMInventory(drm, a.fallbackInventory())
 	}
-	gpus := parseAmdStatic(staticJSON)
-	if len(gpus) == 0 {
-		return nil
-	}
-	a.setGTTMemoryKinds(gpus)
+	reconcileAmdStaticWithDRM(records, drm)
+	context := amdContextFromStatic(records)
+	a.setGPUContext(context)
+	gpus := amdGPUInfos(records)
 	memoryJSON, err := a.command("metric", "--mem-usage", "--json")
 	if err == nil {
-		applyAmdMemoryInventory(gpus, parseAmdMemory(memoryJSON))
+		applyAmdMemoryInventory(gpus, parseAmdMemoryWithKeys(memoryJSON, context.statsKeys))
 	}
+	applyAmdDRMInventory(gpus, drm)
 	return gpus
 }
 
 func (a *amdLinuxGPUAdapter) sample() (map[string]gpuStat, int) {
-	if a.unavailable.Load() {
-		return nil, 0
-	}
-	metricsJSON, err := a.command("metric", "--usage", "--mem-usage", "--json")
-	if err != nil {
-		if a.unavailable.CompareAndSwap(false, true) {
-			slog.Warn("amd-smi unavailable; AMD GPU utilization / memory-used will not be reported", "err", err)
+	drm := a.drmGPUs()
+	context := a.gpuContext(drm)
+	stats := make(map[string]gpuStat)
+	utilizationKeys := make(map[string]bool)
+	if !a.unavailable.Load() {
+		metricsJSON, err := a.command("metric", "--usage", "--mem-usage", "--json")
+		if err != nil {
+			if a.unavailable.CompareAndSwap(false, true) {
+				slog.Warn("amd-smi unavailable; using kernel DRM telemetry for AMD GPUs", "err", err)
+			}
+		} else {
+			stats, utilizationKeys = parseAmdDynamicWithKeys(metricsJSON, context.gttMemory, context.statsKeys)
 		}
-		return nil, 0
 	}
-	return parseAmdDynamic(metricsJSON, a.gttMemoryKinds())
+	if stats == nil {
+		stats = make(map[string]gpuStat)
+	}
+	if utilizationKeys == nil {
+		utilizationKeys = make(map[string]bool)
+	}
+	mergeAmdDRMStats(stats, utilizationKeys, drm, context)
+	return stats, len(utilizationKeys)
 }
 
 func (a *amdLinuxGPUAdapter) command(args ...string) (string, error) {
@@ -284,42 +310,62 @@ func (a *amdLinuxGPUAdapter) command(args ...string) (string, error) {
 	return a.run(ctx, "amd-smi", args...)
 }
 
-func (a *amdLinuxGPUAdapter) setGTTMemoryKinds(gpus []GPUInfo) {
-	gttMemory := make(map[string]bool, len(gpus))
-	for _, gpu := range gpus {
-		gttMemory[gpu.statsKey] = gpu.usesGTTMemory
+func (a *amdLinuxGPUAdapter) drmGPUs() []amdDRMGPU {
+	if a.readDRM == nil {
+		return nil
 	}
-	a.memoryKindsMu.Lock()
-	a.gttMemory = gttMemory
-	a.memoryKindsKnown = true
-	a.memoryKindsMu.Unlock()
+	return a.readDRM()
 }
 
-// gttMemoryKinds lazily loads static memory kinds for the collector instance.
-// Startup detection uses a separate adapter instance, so this avoids assuming
-// that its process-local cache is available to the ticker.
-func (a *amdLinuxGPUAdapter) gttMemoryKinds() map[string]bool {
-	a.memoryKindsMu.RLock()
-	if a.memoryKindsKnown {
-		kinds := copyGTTMemoryKinds(a.gttMemory)
-		a.memoryKindsMu.RUnlock()
-		return kinds
+func (a *amdLinuxGPUAdapter) fallbackInventory() []GPUInfo {
+	if a.fallback == nil {
+		return nil
 	}
-	a.memoryKindsMu.RUnlock()
-
-	staticJSON, err := a.command("static", "--asic", "--vram", "--json")
-	var gpus []GPUInfo
-	if err == nil {
-		gpus = parseAmdStatic(staticJSON)
-	}
-	a.setGTTMemoryKinds(gpus)
-	return a.gttMemoryKinds()
+	return a.fallback()
 }
 
-func copyGTTMemoryKinds(source map[string]bool) map[string]bool {
-	copy := make(map[string]bool, len(source))
-	for key, value := range source {
-		copy[key] = value
+// gpuContext lazily establishes the AMD-SMI index-to-PCI mapping for the
+// independently created background collector. If AMD-SMI is unavailable,
+// DRM order supplies a deterministic mapping and the kernel remains usable.
+func (a *amdLinuxGPUAdapter) gpuContext(drm []amdDRMGPU) amdGPUContext {
+	a.contextMu.RLock()
+	if a.contextSet {
+		context := copyAmdGPUContext(a.context)
+		a.contextMu.RUnlock()
+		return context
+	}
+	a.contextMu.RUnlock()
+
+	staticJSON, err := a.command("static", "--asic", "--bus", "--vram", "--json")
+	records := parseAmdStaticRecords(staticJSON)
+	var context amdGPUContext
+	if err == nil && len(records) > 0 {
+		reconcileAmdStaticWithDRM(records, drm)
+		context = amdContextFromStatic(records)
+	} else {
+		context = amdContextFromDRM(drm)
+	}
+	a.setGPUContext(context)
+	return copyAmdGPUContext(context)
+}
+
+func (a *amdLinuxGPUAdapter) setGPUContext(context amdGPUContext) {
+	a.contextMu.Lock()
+	a.context = copyAmdGPUContext(context)
+	a.contextSet = true
+	a.contextMu.Unlock()
+}
+
+func copyAmdGPUContext(source amdGPUContext) amdGPUContext {
+	copy := amdGPUContext{
+		statsKeys: make(map[int]string, len(source.statsKeys)),
+		gttMemory: make(map[string]bool, len(source.gttMemory)),
+	}
+	for index, key := range source.statsKeys {
+		copy.statsKeys[index] = key
+	}
+	for key, value := range source.gttMemory {
+		copy.gttMemory[key] = value
 	}
 	return copy
 }
@@ -331,6 +377,7 @@ type amdSMIResponse struct {
 type amdSMIGPU struct {
 	GPU      int             `json:"gpu"`
 	ASIC     json.RawMessage `json:"asic"`
+	Bus      json.RawMessage `json:"bus"`
 	VRAM     json.RawMessage `json:"vram"`
 	Usage    json.RawMessage `json:"usage"`
 	MemUsage json.RawMessage `json:"mem_usage"`
@@ -343,36 +390,206 @@ type amdMemory struct {
 	usedGTT   uint64
 }
 
-func parseAmdStatic(out string) []GPUInfo {
+type amdStaticRecord struct {
+	index int
+	bdf   string
+	info  GPUInfo
+}
+
+func parseAmdStaticRecords(out string) []amdStaticRecord {
 	response, ok := parseAmdSMIResponse(out)
 	if !ok {
 		return nil
 	}
-	gpus := make([]GPUInfo, 0, len(response.GPUData))
+	records := make([]amdStaticRecord, 0, len(response.GPUData))
 	for _, gpu := range response.GPUData {
 		name := amdSMIString(amdSMIField(gpu.ASIC, "market_name"))
 		if name == "" || strings.EqualFold(name, "n/a") {
 			continue
 		}
+		bdf := normalizePCIBDF(amdSMIString(amdSMIField(gpu.Bus, "bdf")))
 		vramBytes, _ := amdSMIBytes(amdSMIField(gpu.VRAM, "size"))
-		gpus = append(gpus, GPUInfo{
-			Name:          name,
-			VramBytes:     vramBytes,
-			statsKey:      amdStatsKey(gpu.GPU),
-			usesGTTMemory: amdSMIUsesGTTMemory(gpu.VRAM),
+		records = append(records, amdStaticRecord{
+			index: gpu.GPU,
+			bdf:   bdf,
+			info: GPUInfo{
+				Name:          name,
+				VramBytes:     vramBytes,
+				statsKey:      amdStatsKeyForBDF(gpu.GPU, bdf),
+				pciAddress:    bdf,
+				usesGTTMemory: amdSMIUsesGTTMemory(gpu.VRAM),
+			},
 		})
+	}
+	return records
+}
+
+func parseAmdStatic(out string) []GPUInfo {
+	return amdGPUInfos(parseAmdStaticRecords(out))
+}
+
+func amdGPUInfos(records []amdStaticRecord) []GPUInfo {
+	gpus := make([]GPUInfo, 0, len(records))
+	for _, record := range records {
+		gpus = append(gpus, record.info)
 	}
 	return gpus
 }
 
+func reconcileAmdStaticWithDRM(records []amdStaticRecord, drm []amdDRMGPU) {
+	byBDF := make(map[string]amdDRMGPU, len(drm))
+	for _, gpu := range drm {
+		byBDF[gpu.bdf] = gpu
+	}
+	for i := range records {
+		device, ok := byBDF[records[i].bdf]
+		if !ok && records[i].bdf == "" && i < len(drm) {
+			device = drm[i]
+			ok = true
+		}
+		if !ok {
+			continue
+		}
+		records[i].bdf = device.bdf
+		records[i].info.pciAddress = device.bdf
+		records[i].info.statsKey = amdStatsKeyForBDF(records[i].index, device.bdf)
+		if device.usesUnifiedMemory {
+			records[i].info.usesGTTMemory = true
+			if device.gttTotalKnown {
+				records[i].info.VramBytes = device.gttTotal
+			}
+		} else if records[i].info.VramBytes == 0 && device.vramTotalKnown {
+			records[i].info.VramBytes = device.vramTotal
+		}
+	}
+}
+
+func amdContextFromStatic(records []amdStaticRecord) amdGPUContext {
+	context := amdGPUContext{
+		statsKeys: make(map[int]string, len(records)),
+		gttMemory: make(map[string]bool, len(records)),
+	}
+	for _, record := range records {
+		context.statsKeys[record.index] = record.info.statsKey
+		context.gttMemory[record.info.statsKey] = record.info.usesGTTMemory
+	}
+	return context
+}
+
+func amdContextFromDRM(drm []amdDRMGPU) amdGPUContext {
+	context := amdGPUContext{
+		statsKeys: make(map[int]string, len(drm)),
+		gttMemory: make(map[string]bool, len(drm)),
+	}
+	for index, gpu := range drm {
+		key := amdStatsKeyForBDF(index, gpu.bdf)
+		context.statsKeys[index] = key
+		context.gttMemory[key] = gpu.usesUnifiedMemory
+	}
+	return context
+}
+
+func amdDRMInventory(drm []amdDRMGPU, fallback []GPUInfo) []GPUInfo {
+	names := make(map[string]string, len(fallback))
+	for _, gpu := range fallback {
+		if gpu.pciAddress != "" {
+			names[normalizePCIBDF(gpu.pciAddress)] = gpu.Name
+		}
+	}
+	gpus := make([]GPUInfo, 0, len(drm))
+	for index, device := range drm {
+		name := names[device.bdf]
+		if name == "" {
+			name = unknownAMDDeviceName
+			if device.deviceID != "" {
+				name += " 0x" + device.deviceID
+			}
+		}
+		gpu := GPUInfo{
+			Name:          name,
+			statsKey:      amdStatsKeyForBDF(index, device.bdf),
+			pciAddress:    device.bdf,
+			usesGTTMemory: device.usesUnifiedMemory,
+		}
+		if device.usesUnifiedMemory && device.gttTotalKnown {
+			gpu.VramBytes = device.gttTotal
+		} else if device.vramTotalKnown {
+			gpu.VramBytes = device.vramTotal
+		}
+		gpus = append(gpus, gpu)
+	}
+	return gpus
+}
+
+func applyAmdDRMInventory(gpus []GPUInfo, drm []amdDRMGPU) {
+	byBDF := make(map[string]amdDRMGPU, len(drm))
+	for _, device := range drm {
+		byBDF[device.bdf] = device
+	}
+	for i := range gpus {
+		device, ok := byBDF[normalizePCIBDF(gpus[i].pciAddress)]
+		if !ok {
+			continue
+		}
+		if device.usesUnifiedMemory && device.gttTotalKnown {
+			gpus[i].VramBytes = device.gttTotal
+		} else if !device.usesUnifiedMemory && device.vramTotalKnown {
+			gpus[i].VramBytes = device.vramTotal
+		}
+	}
+}
+
+func mergeAmdDRMStats(stats map[string]gpuStat, utilizationKeys map[string]bool, drm []amdDRMGPU, context amdGPUContext) {
+	for index, device := range drm {
+		key := amdDRMStatsKey(index, device, context)
+		if key == "" {
+			continue
+		}
+		stat := stats[key]
+		haveStat := false
+		if device.utilizationKnown {
+			stat.UtilizationPct = device.utilizationPercent
+			utilizationKeys[key] = true
+			haveStat = true
+		}
+		if device.usesUnifiedMemory && device.gttUsedKnown {
+			stat.VRAMUsed = device.gttUsed
+			haveStat = true
+		} else if !device.usesUnifiedMemory && device.vramUsedKnown {
+			stat.VRAMUsed = device.vramUsed
+			haveStat = true
+		}
+		if haveStat {
+			stats[key] = stat
+		}
+	}
+}
+
+func amdDRMStatsKey(index int, device amdDRMGPU, context amdGPUContext) string {
+	bdfKey := amdStatsKeyForBDF(index, device.bdf)
+	for _, key := range context.statsKeys {
+		if key == bdfKey {
+			return key
+		}
+	}
+	if key := context.statsKeys[index]; key != "" && !strings.HasPrefix(key, "amd:pci:") {
+		return key
+	}
+	return bdfKey
+}
+
 func parseAmdMemory(out string) map[string]amdMemory {
+	return parseAmdMemoryWithKeys(out, nil)
+}
+
+func parseAmdMemoryWithKeys(out string, statsKeys map[int]string) map[string]amdMemory {
 	response, ok := parseAmdSMIResponse(out)
 	if !ok {
 		return nil
 	}
 	memory := make(map[string]amdMemory, len(response.GPUData))
 	for _, gpu := range response.GPUData {
-		memory[amdStatsKey(gpu.GPU)] = amdMemoryFromJSON(gpu.MemUsage)
+		memory[amdStatsKeyFromMap(gpu.GPU, statsKeys)] = amdMemoryFromJSON(gpu.MemUsage)
 	}
 	return memory
 }
@@ -392,27 +609,33 @@ func applyAmdMemoryInventory(gpus []GPUInfo, memory map[string]amdMemory) {
 }
 
 func parseAmdDynamic(out string, gttMemory map[string]bool) (map[string]gpuStat, int) {
+	stats, utilizationKeys := parseAmdDynamicWithKeys(out, gttMemory, nil)
+	return stats, len(utilizationKeys)
+}
+
+func parseAmdDynamicWithKeys(out string, gttMemory map[string]bool, statsKeys map[int]string) (map[string]gpuStat, map[string]bool) {
 	response, ok := parseAmdSMIResponse(out)
 	if !ok {
-		return nil, 0
+		return nil, nil
 	}
 	stats := make(map[string]gpuStat, len(response.GPUData))
-	utilizationSamples := 0
+	utilizationKeys := make(map[string]bool)
 	for _, gpu := range response.GPUData {
+		key := amdStatsKeyFromMap(gpu.GPU, statsKeys)
 		stat := gpuStat{}
 		if utilization, ok := amdSMIPercent(amdSMIField(gpu.Usage, "gfx_activity")); ok {
 			stat.UtilizationPct = utilization
-			utilizationSamples++
+			utilizationKeys[key] = true
 		}
 		memory := amdMemoryFromJSON(gpu.MemUsage)
-		if gttMemory[amdStatsKey(gpu.GPU)] && memory.totalGTT > 0 {
+		if gttMemory[key] && memory.totalGTT > 0 {
 			stat.VRAMUsed = memory.usedGTT
 		} else {
 			stat.VRAMUsed = memory.usedVRAM
 		}
-		stats[amdStatsKey(gpu.GPU)] = stat
+		stats[key] = stat
 	}
-	return stats, utilizationSamples
+	return stats, utilizationKeys
 }
 
 func amdMemoryFromJSON(raw json.RawMessage) amdMemory {
@@ -442,6 +665,20 @@ func parseAmdSMIResponse(out string) (amdSMIResponse, bool) {
 
 func amdStatsKey(gpu int) string {
 	return fmt.Sprintf("amd:%d", gpu)
+}
+
+func amdStatsKeyForBDF(gpu int, bdf string) string {
+	if bdf = normalizePCIBDF(bdf); bdf != "" {
+		return "amd:pci:" + bdf
+	}
+	return amdStatsKey(gpu)
+}
+
+func amdStatsKeyFromMap(gpu int, statsKeys map[int]string) string {
+	if key := statsKeys[gpu]; key != "" {
+		return key
+	}
+	return amdStatsKey(gpu)
 }
 
 func amdSMIField(raw json.RawMessage, name string) json.RawMessage {
